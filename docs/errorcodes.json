@@ -1,5 +1,5 @@
 {
-  "version": "v0.4 (M1a/M1b/M2)",
+  "version": "v0.5 (M1a/M1b/M2/M3)",
   "webhook_send": {
     "ok": 0,
     "invalid_webhook_key": 93000,
@@ -40,5 +40,20 @@
     "invalid_webhook_key": 93000,
     "invalid_media_type": 40004,
     "invalid_media_file": 40005
+  },
+  "oauth2": {
+    "ok": 0,
+    "access_token_missing": 41001,
+    "invalid_access_token": 40014,
+    "invalid_code": 40029,
+    "code_already_used": 40163
+  },
+  "appchat": {
+    "ok": 0,
+    "access_token_missing": 41001,
+    "invalid_access_token": 40014,
+    "invalid_msgtype": 40058,
+    "invalid_content": 40008,
+    "content_too_big": 45002
   }
 }

@@ -53,15 +53,17 @@ curl -X POST 'http://127.0.0.1:7788/cgi-bin/webhook/send?key=<webhook_key>' \
    在群聊页发送 `@示例机器人 你好`，接入方以一次性 `stream`（`finish=true`）被动回复，
    回复出现在群里；也可用回调中的 `response_url` 异步主动回复（一次性、1 小时有效）。
 
-4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路，27 项）：
+4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路，42 项）：
 
 ```bash
 make selftest
 ```
 
-   27 项覆盖：URL 验证握手、webhook/send（含错误码、image/news/template_card/markdown_v2）、
+   42 项覆盖：URL 验证握手、webhook/send（含错误码、image/news/template_card/markdown_v2）、
    @机器人回调、流式多轮刷新、response_url（一次性语义）、template_card、机器人单聊 + 进入会话欢迎语、
    自建应用全链路（gettoken→message/send→XML 回调）、通讯录只读（user/get、user/simplelist）、
+   长连接 wss（订阅/消息回调/被动回复/事件回调）、模板卡片交互（template_card_event → update_template_card）、
+   OAuth2 授权（code 换 userid、一次性）、应用群聊 appchat/send、消息导出（JSON/CSV）与会话回放、
    TLS 自签证书。
 
 5. **流式回复**：接入方被动回复 `finish=false` 的 stream 消息，平台按 1s 节奏轮询刷新，
@@ -70,6 +72,10 @@ make selftest
 6. **自建应用**：启动日志里的 gettoken 地址换 token，再 `message/send` 给指定 userid；
    消息落在"用户↔应用"单聊会话（客户端左侧会话列表可切换），用户在该会话发言会触发
    XML 加密回调（receiveid=corpid）。
+
+7. **机器人长连接（M3）**：SDK 以 wss 连入 `ws://<平台>/cgi-bin/aibot/ws`，
+   `aibot_subscribe`（bot_id + secret）鉴权后接收 `aibot_msg_callback` / `aibot_event_callback` 帧，
+   以 `aibot_respond_msg` 回复；有活跃长连接时平台优先走长连接推送（见 `examples/pingbot-ws`）。
 
 ## 当前阶段
 
@@ -83,7 +89,11 @@ make selftest
   template_card）；`webhook/upload_media` 素材（file/voice）；机器人单聊（chattype=single）+ 进入会话
   欢迎语被动回复；通讯录只读（user/get、user/simplelist）；错误码对照表与机器可读 JSON 补全；
   selftest 扩至 27 项。
-- **M3**（未启动）：智能机器人长连接模式同形模拟、卡片交互事件、OAuth2、hosts 劫持脚本、消息导出。
+- **M3 已完成**：智能机器人长连接模式同形模拟（wss `aibot_subscribe`/`aibot_msg_callback`/
+  `aibot_event_callback`/`aibot_respond_msg`，`examples/pingbot-ws`）；模板卡片交互
+  （`template_card_event` 回调 + `update_template_card` 原地更新）；OAuth2 网页授权闭环
+  （authorize → code → getuserinfo）与应用群聊 `appchat/send`；hosts 劫持脚本
+  （`scripts/hosts-hijack.sh`）；消息导出（JSON/CSV）与会话级回放；selftest 扩至 42 项。
 
 ## 目录结构
 
