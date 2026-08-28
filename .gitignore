@@ -1,0 +1,10 @@
+# 编辑器
+.idea/
+
+# 运行时数据与构建产物
+data/
+im-server
+*.log
+
+# demo 前端依赖
+testweb/web/node_modules/
