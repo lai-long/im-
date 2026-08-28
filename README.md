@@ -53,19 +53,28 @@ curl -X POST 'http://127.0.0.1:7788/cgi-bin/webhook/send?key=<webhook_key>' \
    在群聊页发送 `@示例机器人 你好`，接入方以一次性 `stream`（`finish=true`）被动回复，
    回复出现在群里；也可用回调中的 `response_url` 异步主动回复（一次性、1 小时有效）。
 
-4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路）：
+4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路，13 项）：
 
 ```bash
 make selftest
 ```
 
+   覆盖：URL 验证握手、webhook/send（含错误码）、@机器人回调、流式多轮刷新、
+   response_url（一次性语义）、template_card、TLS 自签证书。
+
+5. **流式回复**：接入方被动回复 `finish=false` 的 stream 消息，平台按 1s 节奏轮询刷新，
+   客户端同一条气泡实时更新，直至 `finish=true` 或 6 分钟窗口结束。
+
 ## 当前阶段
 
-- **M1a 已完成**：webhook/send（text/markdown）、服务号式回调分发（加密推送、5s 超时重推 3 次、
-  死信、被动回复）、response_url 主动回复、WS 实时群聊、控制台（机器人/群管理、回调保存即验证、
+- **M1a 已完成**：webhook/send（text/markdown）、回调分发（加密推送、5s 超时重推 3 次、死信、
+  被动回复）、response_url 主动回复、WS 实时群聊、控制台（机器人/群管理、回调保存即验证、
   消息流水、回调重放）、回环自测、Go/Python 接入方示例。
-- **M1b 待做**：流式回复轮询（1s 节奏、6 分钟窗口）、template_card、TLS 自签证书。
-- **M2 起**：自建应用兼容（gettoken / message/send / XML 回调）、素材、机器人单聊。
+- **M1b 已完成**：流式回复轮询（1s 节奏、全量刷新覆盖同一条消息、6 分钟窗口）、
+  template_card（被动回复与 response_url）、TLS 自签证书（`-tls`）。
+- **M2 起**：自建应用兼容（gettoken / message/send / XML 回调）、素材（webhook/upload_media）、
+  机器人单聊、明文回调模式。
+- **M3**：智能机器人长连接模式同形模拟、卡片交互事件、OAuth2、hosts 劫持脚本。
 
 ## 目录结构
 
