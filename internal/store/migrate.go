@@ -133,6 +133,16 @@ CREATE INDEX idx_token_value ON token(access_token);
 	`ALTER TABLE chat ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0; -- single 会话对应的机器人`,
 	// v6：机器人长连接（M3）订阅密钥；有活跃 wss 连接时优先走长连接推送
 	`ALTER TABLE bot ADD COLUMN secret TEXT NOT NULL DEFAULT ''; -- 长连接 aibot_subscribe 鉴权密钥`,
+	// v7：OAuth2 网页授权（M3）：授权码一次性、短时有效
+	`
+CREATE TABLE oauth_code(
+  code       TEXT PRIMARY KEY,
+  userid     TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used       INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+`,
 }
 
 // migrate 依次执行未应用的迁移。

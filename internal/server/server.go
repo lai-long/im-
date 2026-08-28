@@ -73,6 +73,7 @@ func (s *Server) Handler() http.Handler {
 	api.RegisterAgentAPI(mux, s.Core, s.st)              // 自建应用（M2）
 	api.RegisterUploadMedia(mux, s.st)                   // 素材上传（M2）
 	api.RegisterCardAPI(mux, s.Core, s.st, s.Dispatcher) // 模板卡片交互（M3）
+	api.RegisterOAuthAPI(mux, s.Core, s.st)              // OAuth2 授权 + 应用群聊（M3）
 
 	// 客户端内部 API 与 WS
 	api.RegisterClientAPI(mux, s.Core, s.st)

@@ -354,6 +354,44 @@ func Run(dataDir string) int {
 		}
 	}
 
+	// 6g. OAuth2 网页授权 + 应用群聊 appchat/send（M3）
+	if corp.CorpID != "" {
+		if agent3, aerr := st.GetAgent(1); aerr == nil {
+			gt := getJSON(plat.URL + "/cgi-bin/gettoken?corpid=" + corp.CorpID + "&corpsecret=" + url.QueryEscape(agent3.Corpsecret))
+			if tk, ok := gt["access_token"].(string); ok && tk != "" {
+				// 授权：302 回跳带 code 与 state
+				loc := getRedirectLocation(plat.URL + "/cgi-bin/oauth2/authorize?appid=" +
+					corp.CorpID + "&redirect_uri=" + url.QueryEscape("http://localhost/cb") +
+					"&state=xyz&userid=zhangsan")
+				u2, uerr := url.Parse(loc)
+				oauthOK := uerr == nil && u2 != nil && u2.Query().Get("code") != "" && u2.Query().Get("state") == "xyz"
+				add("OAuth2 授权跳转", oauthOK, "302 回跳 code+state")
+
+				var oauthCode string
+				if u2 != nil {
+					oauthCode = u2.Query().Get("code")
+				}
+				// code 换 userid
+				if oauthCode != "" {
+					gui := getJSON(plat.URL + "/cgi-bin/user/getuserinfo?access_token=" + tk + "&code=" + url.QueryEscape(oauthCode))
+					add("OAuth2 code 换 userid", gui["errcode"] == 0.0 && gui["userid"] == "zhangsan", "getuserinfo → zhangsan")
+					gui2 := getJSON(plat.URL + "/cgi-bin/user/getuserinfo?access_token=" + tk + "&code=" + url.QueryEscape(oauthCode))
+					add("OAuth2 code 一次性", gui2["errcode"] == 40163.0, "code 复用 → 40163")
+				} else {
+					add("OAuth2 code 换 userid", false, "未取到授权码")
+					add("OAuth2 code 一次性", false, "未取到授权码")
+				}
+
+				// 应用群聊：首次发送自动建群
+				code, msg := postJSON(plat.URL+"/cgi-bin/appchat/send?access_token="+tk,
+					`{"chatid":"wc_selftest","msgtype":"text","text":{"content":"appchat hello"}}`)
+				ac, acerr := st.GetChatByChatid("wc_selftest")
+				okMsgs := acerr == nil && countMessages(st, ac.ID, "text") >= 1
+				add("应用群聊 appchat/send", code == 0 && okMsgs, msg+"（自动建群）")
+			}
+		}
+	}
+
 	// 7. TLS 自签证书（M1b）
 	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
 	if err != nil {
@@ -681,4 +719,17 @@ func lastCardMsgid(st *store.Store, chatID int64) string {
 		}
 	}
 	return ""
+}
+
+// getRedirectLocation 请求并返回 302 跳转的 Location（不跟随重定向）。
+func getRedirectLocation(rawURL string) string {
+	cli := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := cli.Get(rawURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get("Location")
 }
