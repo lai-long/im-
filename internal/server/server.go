@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"im-/internal/api"
+	"im-/internal/callback"
 	"im-/internal/config"
 	"im-/internal/core"
 	"im-/internal/store"
@@ -18,18 +19,24 @@ var webFS embed.FS
 
 // Server 是组装好的平台实例。
 type Server struct {
-	cfg  *config.Config
-	st   *store.Store
-	hub  *ws.Hub
-	Core *core.Service
+	cfg        *config.Config
+	st         *store.Store
+	hub        *ws.Hub
+	Core       *core.Service
+	Dispatcher *callback.Dispatcher
 }
 
 // New 初始化全部组件并返回。
 func New(cfg *config.Config, st *store.Store) *Server {
 	s := &Server{cfg: cfg, st: st, hub: ws.NewHub()}
 	s.Core = core.New(st, func(ev core.Event) { s.hub.Broadcast(ev) })
+	s.Dispatcher = callback.NewDispatcher(st, cfg.ExternalBaseURL(), s.Core)
+	s.Core.OnBotMention = s.Dispatcher.EnqueueUserMessage
 	return s
 }
+
+// Start 启动后台组件（回调消费循环）。
+func (s *Server) Start() { s.Dispatcher.Start() }
 
 // Handler 返回根路由。
 func (s *Server) Handler() http.Handler {

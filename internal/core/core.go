@@ -14,6 +14,8 @@ type Service struct {
 	st *store.Store
 	// Broadcast 把事件推给 WS 网关等订阅方。
 	Broadcast func(ev Event)
+	// OnBotMention 在用户消息命中群内机器人时触发（回调分发器接入点）。
+	OnBotMention func(msg store.Message, bot store.Bot)
 }
 
 // New 创建消息核心。broadcast 为空时不推送。
@@ -92,6 +94,9 @@ func (s *Service) UserMessage(chatID, userID int64, text string) (store.Message,
 	for _, b := range bots {
 		if strings.Contains(text, "@"+b.Name) {
 			hit = append(hit, b)
+			if s.OnBotMention != nil {
+				s.OnBotMention(m, b)
+			}
 		}
 	}
 	return m, hit, nil
