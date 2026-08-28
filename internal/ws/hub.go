@@ -42,6 +42,21 @@ func (h *Hub) Broadcast(v any) {
 	}
 }
 
+// SendToUser 只向指定 userid 的连接推送（会话回放用）。
+func (h *Hub) SendToUser(userid string, v any) {
+	h.mu.RLock()
+	var targets []*Conn
+	for c := range h.conns {
+		if c.Userid == userid {
+			targets = append(targets, c)
+		}
+	}
+	h.mu.RUnlock()
+	for _, c := range targets {
+		_ = c.writeJSON(v)
+	}
+}
+
 var upgrader = websocket.Upgrader{
 	// 本地开发工具：允许任意来源
 	CheckOrigin: func(*http.Request) bool { return true },

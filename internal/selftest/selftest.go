@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,6 +393,32 @@ func Run(dataDir string) int {
 		}
 	}
 
+	// 6h. 消息导出与会话回放（M3）
+	expResp, xerr := http.Get(plat.URL + "/api/export?chat_id=" + strconv.FormatInt(chat.ID, 10))
+	if xerr != nil {
+		add("消息导出 JSON", false, xerr.Error())
+	} else {
+		var arr []map[string]any
+		_ = json.NewDecoder(expResp.Body).Decode(&arr)
+		expResp.Body.Close()
+		add("消息导出 JSON", len(arr) > 0, fmt.Sprintf("%d 条", len(arr)))
+	}
+	csvResp, cerr := http.Get(plat.URL + "/api/export?chat_id=" + strconv.FormatInt(chat.ID, 10) + "&format=csv")
+	if cerr == nil {
+		csvBody, _ := io.ReadAll(io.LimitReader(csvResp.Body, 1<<20))
+		csvResp.Body.Close()
+		add("消息导出 CSV", strings.HasPrefix(string(csvBody), "ts,sender"), "带表头")
+	} else {
+		add("消息导出 CSV", false, cerr.Error())
+	}
+	rep := postJSONMap(plat.URL+"/api/replay",
+		fmt.Sprintf(`{"userid":"zhangsan","chat_id":%d}`, chat.ID))
+	if cnt, ok := rep["count"].(float64); ok && cnt > 0 {
+		add("会话回放", true, fmt.Sprintf("重推 %.0f 条", cnt))
+	} else {
+		add("会话回放", false, fmt.Sprintf("回放结果异常: %v", rep))
+	}
+
 	// 7. TLS 自签证书（M1b）
 	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
 	if err != nil {
@@ -441,6 +468,23 @@ func postJSON(url, body string) (int, string) {
 // getJSON 发送 GET 并解析整个 JSON 响应。
 func getJSON(url string) map[string]any {
 	resp, err := http.Get(url)
+	if err != nil {
+		return map[string]any{"errcode": -1, "errmsg": err.Error()}
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out
+}
+
+// postJSONMap 发送 JSON POST，返回整个 JSON 响应。
+func postJSONMap(url, body string) map[string]any {
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return map[string]any{"errcode": -1, "errmsg": err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return map[string]any{"errcode": -1, "errmsg": err.Error()}
 	}

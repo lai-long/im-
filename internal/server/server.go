@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 
 	// 客户端内部 API 与 WS
 	api.RegisterClientAPI(mux, s.Core, s.st)
+	api.RegisterExportAPI(mux, s.st, s.hub) // 消息导出/回放（M3）
 	s.hub.Register(mux)
 
 	// 机器人长连接（M3）：wss 订阅端点

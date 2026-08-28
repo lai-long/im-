@@ -207,7 +207,7 @@ function connect() {
   ws.onopen = () => { retry = 0; loadHistory(); };
   ws.onmessage = e => {
     const ev = JSON.parse(e.data);
-    if (ev.kind === 'message') { loadChats(); if (ev.message.chat_id === activeChatId) render(ev.message); }
+    if (ev.kind === 'message' || ev.kind === 'replay') { loadChats(); if (ev.message.chat_id === activeChatId) render(ev.message); }
     if (ev.kind === 'stream') { if (ev.message.chat_id === activeChatId) renderStream(ev.message); }
   };
   ws.onclose = () => { setTimeout(connect, Math.min(1000 * ++retry, 5000)); };
