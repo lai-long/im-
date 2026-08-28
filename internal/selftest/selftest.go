@@ -1,6 +1,6 @@
-// Package selftest 是回环自测：进程内启动平台 + mock 接入方，跑完 M1a + M1b + M2 验收全链路。
+// Package selftest 是回环自测：进程内启动平台 + mock 接入方，跑完 M1a + M1b + M2 + M3 验收全链路。
 // 接入方侧使用企微官方加解密库（sbzhu/weworkapi_golang）实现，用于跨实现互通验证；
-// 平台侧走真实 HTTP 路由，覆盖 docs/方案文档.md §7 的验收标准 1–6。
+// 平台侧走真实 HTTP 路由，覆盖 docs/方案文档.md §7 的验收标准。
 package selftest
 
 import (
@@ -14,9 +14,11 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/websocket"
 	official "github.com/sbzhu/weworkapi_golang/wxbizmsgcrypt"
 
 	"im-/internal/config"
@@ -257,6 +259,55 @@ func Run(dataDir string) int {
 		}
 	}
 
+	// 6e. 机器人长连接（M3）：wss 订阅 + aibot_msg_callback + aibot_respond_msg
+	fullBot, err := st.GetBot(bot.ID)
+	if err != nil {
+		add("长连接 wss 订阅", false, err.Error())
+	} else {
+		wsc, werr := dialWSBot(plat.URL, fullBot.Aibotid, fullBot.Secret)
+		if werr != nil {
+			add("长连接 wss 订阅", false, werr.Error())
+		} else {
+			defer wsc.close()
+			add("长连接 wss 订阅", wsc.subscribed.Load() == 1, "aibot_subscribe → code 0")
+
+			streamBefore := countMessages(st, chat.ID, "stream")
+			if _, _, err := srv.Core.UserMessage(chat.ID, u.ID, "@"+fullBot.Name+" 走长连接"); err != nil {
+				add("长连接 收到消息回调", false, err.Error())
+			} else {
+				ok := waitUntil(func() bool { return wsc.received.Load() >= 1 }, 5*time.Second)
+				fr := wsc.last()
+				fieldsOK := ok && fr != nil && fr["msgtype"] == "text" &&
+					fr["chattype"] == "group" && fr["from"].(map[string]any)["userid"] == "zhangsan"
+				add("长连接 收到消息回调", fieldsOK, "aibot_msg_callback 字段完整")
+			}
+			okReply := waitUntil(func() bool {
+				return countMessages(st, chat.ID, "stream") > streamBefore
+			}, 5*time.Second)
+			add("长连接 被动回复落群", okReply, "aibot_respond_msg → stream 落群")
+
+			// 事件回调：进入机器人单聊（enter_agent）
+			sc, _, _ := st.OpenBotSingleChat(fullBot.ID, u.ID, fullBot.Name)
+			if sc.ID != 0 {
+				entryBefore := countMessages(st, sc.ID, "stream")
+				srv.Dispatcher.EnqueueBotEntry(sc, fullBot, u)
+				okEvent := waitUntil(func() bool {
+					for _, f := range wsc.snapshot() {
+						if f["type"] == "aibot_event_callback" && f["event"] == "enter_agent" {
+							return true
+						}
+					}
+					return false
+				}, 5*time.Second)
+				add("长连接 事件回调 enter_agent", okEvent, "aibot_event_callback 送达")
+				okEntry := waitUntil(func() bool {
+					return countMessages(st, sc.ID, "stream") > entryBefore
+				}, 5*time.Second)
+				add("长连接 欢迎语回复落单聊", okEntry, "event → 被动回复")
+			}
+		}
+	}
+
 	// 7. TLS 自签证书（M1b）
 	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
 	if err != nil {
@@ -268,7 +319,7 @@ func Run(dataDir string) int {
 	}
 
 	// 输出
-	fmt.Println("\n=== 回环自测（M1a + M1b + M2 验收全链路）===")
+	fmt.Println("\n=== 回环自测（M1a + M1b + M2 + M3 验收全链路）===")
 	failed := 0
 	for _, c := range checks {
 		status := "PASS"
@@ -494,3 +545,83 @@ func newXMLReceiver(token, aesKey, corpid string) *xmlReceiver {
 	m.URL = srv.URL
 	return m
 }
+
+// wsBot 模拟"长连接接入方"（M3）：wss 订阅后，收到 aibot_msg_callback /
+// aibot_event_callback 帧即回一帧 aibot_respond_msg（stream finish=true）。
+type wsBot struct {
+	conn       *websocket.Conn
+	subscribed atomic.Int32
+	received   atomic.Int32
+	mu         sync.Mutex
+	frames     []map[string]any
+}
+
+// dialWSBot 连接平台长连接端点并完成 aibot_subscribe 鉴权。
+func dialWSBot(httpBase, aibotid, secret string) (*wsBot, error) {
+	wsURL := "ws://" + strings.TrimPrefix(httpBase, "http://") + "/cgi-bin/aibot/ws"
+	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("连接 %s: %w", wsURL, err)
+	}
+	w := &wsBot{conn: c}
+	if err := c.WriteJSON(map[string]any{
+		"type": "aibot_subscribe", "bot_id": aibotid, "secret": secret}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	var resp map[string]any
+	if err := c.ReadJSON(&resp); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if code, _ := resp["code"].(float64); code != 0 {
+		c.Close()
+		return nil, fmt.Errorf("subscribe 失败: %v", resp)
+	}
+	w.subscribed.Store(1)
+	go w.readLoop()
+	return w, nil
+}
+
+func (w *wsBot) readLoop() {
+	for {
+		var frame map[string]any
+		if err := w.conn.ReadJSON(&frame); err != nil {
+			return
+		}
+		typ, _ := frame["type"].(string)
+		w.mu.Lock()
+		w.frames = append(w.frames, frame)
+		w.mu.Unlock()
+		if typ != "aibot_msg_callback" && typ != "aibot_event_callback" {
+			continue
+		}
+		w.received.Add(1)
+		reply := map[string]any{
+			"type":    "aibot_respond_msg",
+			"msgid":   frame["msgid"],
+			"msgtype": "stream",
+			"stream":  map[string]any{"id": "wss", "finish": true, "content": "**pong via wss**"},
+		}
+		_ = w.conn.WriteJSON(reply)
+	}
+}
+
+func (w *wsBot) last() map[string]any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.frames) == 0 {
+		return nil
+	}
+	return w.frames[len(w.frames)-1]
+}
+
+func (w *wsBot) snapshot() []map[string]any {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]map[string]any, len(w.frames))
+	copy(out, w.frames)
+	return out
+}
+
+func (w *wsBot) close() { _ = w.conn.Close() }

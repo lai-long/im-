@@ -8,6 +8,7 @@ import (
 
 	"im-/internal/admin"
 	"im-/internal/api"
+	"im-/internal/botws"
 	"im-/internal/callback"
 	"im-/internal/config"
 	"im-/internal/core"
@@ -25,6 +26,7 @@ type Server struct {
 	hub        *ws.Hub
 	Core       *core.Service
 	Dispatcher *callback.Dispatcher
+	WSHub      *botws.Hub // 机器人长连接 hub（M3）
 }
 
 // New 初始化全部组件并返回。
@@ -44,6 +46,17 @@ func New(cfg *config.Config, st *store.Store) *Server {
 		}
 		s.Dispatcher.EnqueueAgentMessage(m, agent)
 	}
+
+	// 机器人长连接（M3）：接入方 wss 订阅，有活跃连接时优先走长连接推送
+	wsHub := botws.NewHub(func(aibotid, secret string) (int64, bool) {
+		bot, err := st.GetBotByAibotid(aibotid)
+		if err != nil || bot.Secret == "" || bot.Secret != secret {
+			return 0, false
+		}
+		return bot.ID, true
+	})
+	s.WSHub = wsHub
+	s.Dispatcher.SetWSHub(wsHub)
 	return s
 }
 
@@ -63,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 	// 客户端内部 API 与 WS
 	api.RegisterClientAPI(mux, s.Core, s.st)
 	s.hub.Register(mux)
+
+	// 机器人长连接（M3）：wss 订阅端点
+	s.WSHub.Register(mux)
 
 	// 管理控制台 API
 	admin.New(s.st, s.cfg, s.Dispatcher).Register(mux)

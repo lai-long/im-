@@ -11,8 +11,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"im-/internal/botws"
 	"im-/internal/core"
 	"im-/internal/store"
 )
@@ -26,6 +28,9 @@ const pushTimeout = 5 * time.Second
 const (
 	defaultStreamTick   = 1 * time.Second
 	defaultStreamWindow = 6 * time.Minute
+	// defaultWSReplyTimeout 长连接模式下等待接入方 aibot_respond_msg 的单帧超时。
+	// 流式回复可发多帧（finish=false 逐帧刷新），最后一帧须带 finish=true。
+	defaultWSReplyTimeout = 30 * time.Second
 )
 
 // Dispatcher 把用户 @机器人 的消息按智能机器人格式推给接入方，
@@ -40,6 +45,12 @@ type Dispatcher struct {
 	Backoff      []time.Duration // 重试间隔（默认对齐企微 2s/4s/8s；测试可注入）
 	StreamTick   time.Duration   // 流式刷新轮询节奏（默认 1s）
 	StreamWindow time.Duration   // 流式最长窗口（默认 6 分钟，对齐企微）
+
+	// 长连接模式（M3）：接入方以 wss 订阅；有活跃连接时优先走 WS 推送
+	wsHub          *botws.Hub
+	wsMu           sync.Mutex
+	wsWaiters      map[string]chan *replyPayload // key=msgid
+	WSReplyTimeout time.Duration                 // 单帧回复超时（默认 30s）
 }
 
 // NewDispatcher 创建分发器。
@@ -54,6 +65,15 @@ func NewDispatcher(st *store.Store, baseURL string, coreSvc *core.Service) *Disp
 		Backoff:      defaultBackoff,
 		StreamTick:   defaultStreamTick,
 		StreamWindow: defaultStreamWindow,
+		wsWaiters:    map[string]chan *replyPayload{},
+	}
+}
+
+// SetWSHub 挂载长连接 hub（M3）；机器人有活跃连接时，回调优先走 WS 推送。
+func (d *Dispatcher) SetWSHub(h *botws.Hub) {
+	d.wsHub = h
+	if h != nil {
+		h.SetOnFrame(d.onBotFrame)
 	}
 }
 
@@ -253,6 +273,12 @@ func (d *Dispatcher) process(task store.CallbackTask) {
 		_ = d.st.FinishTask(task.ID, "bot missing")
 		return
 	}
+	// 长连接模式（M3）：机器人有活跃 wss 订阅时优先走 WS 推送，否则回落到 HTTP 回调
+	if d.wsHub != nil && d.wsHub.Has(bot.ID) {
+		d.processWS(task, bot, msg)
+		return
+	}
+
 	if bot.CallbackURL == "" {
 		_ = d.st.FinishTask(task.ID, "callback URL 未配置，未推送")
 		return
@@ -379,6 +405,183 @@ func (d *Dispatcher) processStream(task store.CallbackTask, bot store.Bot, msg s
 	}
 	_ = d.st.ContinueStream(task.ID, time.Now().Add(d.StreamTick).Unix())
 	d.wakeLoop()
+}
+
+// processWS 长连接模式（M3）：把回调载荷转成 aibot_msg_callback / aibot_event_callback
+// 帧经 WS 推给接入方，随后等待 aibot_respond_msg 帧（可多帧：流式 finish=false 逐帧刷新），
+// 回复落群逻辑与 HTTP 被动回复一致；无回复/超时按"无回复"完成。
+func (d *Dispatcher) processWS(task store.CallbackTask, bot store.Bot, msg store.Message) {
+	var pf map[string]any
+	if err := json.Unmarshal([]byte(task.Payload), &pf); err != nil {
+		_ = d.st.FinishTask(task.ID, "回调载荷解析失败: "+err.Error())
+		return
+	}
+	msgid, _ := pf["msgid"].(string)
+	if msgid == "" {
+		_ = d.st.FinishTask(task.ID, "回调载荷缺 msgid")
+		return
+	}
+
+	frame := d.wsFrame(pf, msgid)
+	ch := make(chan *replyPayload, 8)
+	d.wsMu.Lock()
+	d.wsWaiters[msgid] = ch
+	d.wsMu.Unlock()
+	defer func() {
+		d.wsMu.Lock()
+		delete(d.wsWaiters, msgid)
+		d.wsMu.Unlock()
+	}()
+
+	if err := d.wsHub.Push(bot.ID, frame); err != nil {
+		_ = d.st.FinishTask(task.ID, "长连接推送失败: "+err.Error())
+		return
+	}
+
+	timeout := d.WSReplyTimeout
+	if timeout <= 0 {
+		timeout = defaultWSReplyTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var lastErr string
+	for {
+		select {
+		case reply := <-ch:
+			done, err := d.applyWSReply(task, bot, msg, reply)
+			if err != "" {
+				lastErr = err
+			}
+			if done {
+				if lastErr != "" {
+					d.retryOrDead(task, lastErr)
+				}
+				return
+			}
+			// finish=false 的流式帧：已更新消息，继续等待下一帧
+		case <-timer.C:
+			if lastErr != "" {
+				d.retryOrDead(task, lastErr)
+			} else {
+				_ = d.st.FinishTask(task.ID, "无回复（长连接超时）")
+			}
+			return
+		}
+	}
+}
+
+// wsFrame 由回调载荷构造长连接帧（对齐官方 aibot_msg_callback / aibot_event_callback）。
+func (d *Dispatcher) wsFrame(pf map[string]any, msgid string) map[string]any {
+	fields := map[string]any{"msgid": msgid}
+	for _, k := range []string{"aibotid", "chatid", "chattype", "from"} {
+		if v, ok := pf[k]; ok {
+			fields[k] = v
+		}
+	}
+	msgtype, _ := pf["msgtype"].(string)
+	switch msgtype {
+	case "event":
+		event, _ := pf["event"].(string)
+		if event == "" {
+			event = "unknown"
+		}
+		fields["event"] = event
+		return botws.EventFrame(event, fields)
+	case "text":
+		if c, ok := pf["text"].(string); ok {
+			fields["text"] = map[string]any{"content": c}
+		}
+	case "markdown":
+		if c, ok := pf["markdown"].(string); ok {
+			fields["markdown"] = map[string]any{"content": c}
+		}
+	}
+	return botws.CallbackFrame(msgtype, fields)
+}
+
+// applyWSReply 处理一帧 aibot_respond_msg：返回 (是否结束, 错误描述)。
+// 流式 finish=false 时仅更新消息并返回 done=false 继续等待下一帧。
+func (d *Dispatcher) applyWSReply(task store.CallbackTask, bot store.Bot, msg store.Message, reply *replyPayload) (bool, string) {
+	if reply == nil {
+		return true, ""
+	}
+	switch reply.MsgType {
+	case "stream":
+		if reply.Stream == nil || reply.Stream.Content == "" {
+			return true, "stream 回复缺少内容"
+		}
+		d.deliver(msg.ChatID, bot, "stream", map[string]any{
+			"content": reply.Stream.Content, "finish": reply.Stream.Finish})
+		if reply.Stream.Finish {
+			return true, ""
+		}
+		return false, "" // 等待下一帧
+	case "template_card":
+		if len(reply.TemplateCard) == 0 {
+			return true, "template_card 回复缺少内容"
+		}
+		d.deliver(msg.ChatID, bot, "template_card", reply.TemplateCard)
+		return true, ""
+	case "text":
+		return true, "text 被动回复仅欢迎语场景支持（M2），已拒绝"
+	default:
+		return true, "不支持的被动回复类型: " + reply.MsgType
+	}
+}
+
+// retryOrDead 按重试节奏推进任务：未超次数则延后重推，否则置死信。
+func (d *Dispatcher) retryOrDead(task store.CallbackTask, lastErr string) {
+	attempt := task.Attempt + 1
+	if attempt <= len(d.Backoff) {
+		_ = d.st.RetryTask(task.ID, attempt, time.Now().Add(d.Backoff[attempt-1]).Unix(), lastErr, false)
+	} else {
+		_ = d.st.RetryTask(task.ID, attempt, 0, lastErr, true)
+	}
+	d.wakeLoop()
+}
+
+// onBotFrame 处理接入方经长连接发来的帧：aibot_respond_msg 按 msgid 路由给等待方。
+func (d *Dispatcher) onBotFrame(botID int64, frame map[string]any) {
+	msgid, ok := botws.ReplyFrame(frame)
+	if !ok {
+		return
+	}
+	reply := parseWSReply(frame)
+	d.wsMu.Lock()
+	ch := d.wsWaiters[msgid]
+	d.wsMu.Unlock()
+	if ch != nil {
+		select {
+		case ch <- reply:
+		default: // 等待方已离开：丢弃
+		}
+	}
+}
+
+// parseWSReply 解析 aibot_respond_msg 帧为被动回复。
+func parseWSReply(frame map[string]any) *replyPayload {
+	r := &replyPayload{}
+	msgtype, _ := frame["msgtype"].(string)
+	r.MsgType = msgtype
+	switch msgtype {
+	case "stream":
+		if s, ok := frame["stream"].(map[string]any); ok {
+			id, _ := s["id"].(string)
+			finish, _ := s["finish"].(bool)
+			content, _ := s["content"].(string)
+			r.Stream = &struct {
+				ID      string `json:"id"`
+				Finish  bool   `json:"finish"`
+				Content string `json:"content"`
+			}{ID: id, Finish: finish, Content: content}
+		}
+	case "template_card":
+		if tc, ok := frame["template_card"].(map[string]any); ok {
+			r.TemplateCard = tc
+		}
+	}
+	return r
 }
 
 // wakeLoop 唤醒消费循环（不阻塞）。

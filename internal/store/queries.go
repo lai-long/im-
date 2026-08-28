@@ -26,6 +26,7 @@ type Bot struct {
 	CallbackAESKey string `json:"callback_aes_key"`
 	CallbackMode   string `json:"callback_mode"` // plain | encrypted
 	CallbackVerif  bool   `json:"callback_verified"`
+	Secret         string `json:"secret"` // 长连接 aibot_subscribe 鉴权密钥（M3）
 }
 
 type User struct {
@@ -55,12 +56,12 @@ func scanBot(row interface{ Scan(...any) error }) (Bot, error) {
 	var b Bot
 	var verif int
 	err := row.Scan(&b.ID, &b.CorpID, &b.Aibotid, &b.Name, &b.CallbackURL,
-		&b.CallbackToken, &b.CallbackAESKey, &b.CallbackMode, &verif)
+		&b.CallbackToken, &b.CallbackAESKey, &b.CallbackMode, &verif, &b.Secret)
 	b.CallbackVerif = verif == 1
 	return b, err
 }
 
-const botCols = `id, corp_id, aibotid, name, callback_url, callback_token, callback_aes_key, callback_mode, callback_verified`
+const botCols = `id, corp_id, aibotid, name, callback_url, callback_token, callback_aes_key, callback_mode, callback_verified, secret`
 
 // GetBot 按 id 取机器人。
 func (s *Store) GetBot(id int64) (Bot, error) {
@@ -108,10 +109,10 @@ func (s *Store) GetChatByWebhookKey(key string) (Chat, Bot, error) {
 	return chat, bot, err
 }
 
-// CreateBot 创建机器人，生成 aibotid 与回调三元组。
+// CreateBot 创建机器人，生成 aibotid、回调三元组与长连接订阅密钥（M3）。
 func (s *Store) CreateBot(corpID int64, name string) (Bot, error) {
-	res, err := s.db.Exec(`INSERT INTO bot(corp_id, aibotid, name, callback_token, callback_aes_key, created_at)
-		VALUES(?,?,?,?,?,?)`, corpID, NewAibotid(), name, NewToken(), NewEncodingAESKey(), now())
+	res, err := s.db.Exec(`INSERT INTO bot(corp_id, aibotid, name, callback_token, callback_aes_key, secret, created_at)
+		VALUES(?,?,?,?,?,?,?)`, corpID, NewAibotid(), name, NewToken(), NewEncodingAESKey(), NewSecret(), now())
 	if err != nil {
 		return Bot{}, err
 	}
@@ -223,6 +224,9 @@ func (s *Store) GetUserByUserid(userid string) (User, error) {
 // 启动日志据此打印（方案文档 §6.1）。
 type SeedWebhookInfo struct {
 	WebhookKey     string
+	BotID          int64
+	Aibotid        string
+	Secret         string // 长连接订阅密钥（M3）
 	BotName        string
 	CallbackToken  string
 	CallbackAESKey string
@@ -232,10 +236,10 @@ func (s *Store) SeedWebhookInfo() (SeedWebhookInfo, error) {
 	var info SeedWebhookInfo
 	info.WebhookKey = SeedWebhookKey
 	err := s.db.QueryRow(`
-		SELECT b.name, b.callback_token, b.callback_aes_key
+		SELECT b.id, b.aibotid, b.secret, b.name, b.callback_token, b.callback_aes_key
 		FROM chat_bot cb JOIN bot b ON b.id = cb.bot_id
 		WHERE cb.webhook_key = ?`, SeedWebhookKey).
-		Scan(&info.BotName, &info.CallbackToken, &info.CallbackAESKey)
+		Scan(&info.BotID, &info.Aibotid, &info.Secret, &info.BotName, &info.CallbackToken, &info.CallbackAESKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return info, ErrNotFound
 	}

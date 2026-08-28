@@ -63,8 +63,8 @@ func (s *Store) seedIfEmpty() error {
 		}
 	}
 
-	r, err = tx.Exec(`INSERT INTO bot(corp_id, aibotid, name, callback_token, callback_aes_key, created_at) VALUES(?,?,?,?,?,?)`,
-		corpID, NewAibotid(), "示例机器人", NewToken(), NewEncodingAESKey(), now)
+	r, err = tx.Exec(`INSERT INTO bot(corp_id, aibotid, name, callback_token, callback_aes_key, secret, created_at) VALUES(?,?,?,?,?,?,?)`,
+		corpID, NewAibotid(), "示例机器人", NewToken(), NewEncodingAESKey(), NewSecret(), now)
 	if err != nil {
 		return err
 	}

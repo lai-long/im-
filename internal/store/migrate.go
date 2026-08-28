@@ -131,6 +131,8 @@ CREATE INDEX idx_token_value ON token(access_token);
 	`ALTER TABLE callback_task ADD COLUMN target_type TEXT NOT NULL DEFAULT 'bot'; -- bot | agent`,
 	// v5：机器人单聊（chattype=single），chat 增加 bot_id 列（direct 会话用 agent_id，single 用 bot_id）
 	`ALTER TABLE chat ADD COLUMN bot_id INTEGER NOT NULL DEFAULT 0; -- single 会话对应的机器人`,
+	// v6：机器人长连接（M3）订阅密钥；有活跃 wss 连接时优先走长连接推送
+	`ALTER TABLE bot ADD COLUMN secret TEXT NOT NULL DEFAULT ''; -- 长连接 aibot_subscribe 鉴权密钥`,
 }
 
 // migrate 依次执行未应用的迁移。
