@@ -374,3 +374,60 @@ func TestWebhookMsgTypes(t *testing.T) {
 		t.Fatalf("未知类型应 40058, got %d", code)
 	}
 }
+
+// TestContactReadOnly 覆盖通讯录只读 user/get、user/simplelist（含错误码）。
+func TestContactReadOnly(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	corp, _ := st.FirstCorp()
+	agent, err := st.CreateAgent(corp.ID, "通讯录应用")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, err := st.IssueToken(agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvc := core.New(st, nil)
+	mux := http.NewServeMux()
+	RegisterAgentAPI(mux, csvc, st)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	get := func(path string) map[string]any {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
+	}
+
+	// 缺 token
+	if v := get("/cgi-bin/user/get?userid=zhangsan"); v["errcode"].(float64) != 41001 {
+		t.Fatalf("缺 token 应 41001, got %v", v["errcode"])
+	}
+	// 未知用户
+	if v := get("/cgi-bin/user/get?access_token=" + tok + "&userid=nope"); v["errcode"].(float64) != 60111 {
+		t.Fatalf("未知用户应 60111, got %v", v["errcode"])
+	}
+	// 存在用户
+	v := get("/cgi-bin/user/get?access_token=" + tok + "&userid=zhangsan")
+	if v["errcode"].(float64) != 0 || v["name"] != "张三" {
+		t.Fatalf("user/get 异常: %v", v)
+	}
+	// 列表
+	l := get("/cgi-bin/user/simplelist?access_token=" + tok)
+	if l["errcode"].(float64) != 0 {
+		t.Fatalf("simplelist 异常: %v", l)
+	}
+	list, _ := l["userlist"].([]any)
+	if len(list) == 0 {
+		t.Fatal("simplelist 为空")
+	}
+}

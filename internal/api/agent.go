@@ -52,6 +52,9 @@ func RegisterAgentAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 	})
 
 	// GET /cgi-bin/media/get?access_token=xxx&media_id=yyy：素材下载（自建应用形态）
+	mux.HandleFunc("GET /cgi-bin/user/get", userGetHandler(st))
+	mux.HandleFunc("GET /cgi-bin/user/simplelist", userSimpleListHandler(st))
+
 	mux.HandleFunc("GET /cgi-bin/media/get", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := st.ValidateToken(r.URL.Query().Get("access_token")); err != nil {
 			writeErrcode(w, errcodeInvalidToken, "invalid access_token")
@@ -164,4 +167,70 @@ func RegisterAgentAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 			"invaliduser": strings.Join(invalid, "|"),
 		})
 	})
+}
+
+// 通讯录只读（M2）：user/get、user/simplelist。
+
+// requireToken 校验 access_token，返回所属应用 id；失败写错误码并返回 0。
+func requireToken(w http.ResponseWriter, r *http.Request, st *store.Store) int64 {
+	tok := r.URL.Query().Get("access_token")
+	if tok == "" {
+		writeErrcode(w, errcodeMissingToken, "access_token missing")
+		return 0
+	}
+	agentID, err := st.ValidateToken(tok)
+	if err != nil {
+		writeErrcode(w, errcodeInvalidToken, "invalid access_token")
+		return 0
+	}
+	return agentID
+}
+
+// GET /cgi-bin/user/get?access_token=xxx&userid=yyy
+func userGetHandler(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if requireToken(w, r, st) == 0 {
+			return
+		}
+		userid := r.URL.Query().Get("userid")
+		if userid == "" {
+			writeErrcode(w, 60111, "userid missing")
+			return
+		}
+		u, err := st.GetUserByUserid(userid)
+		if err != nil {
+			writeErrcode(w, 60111, "userid not found")
+			return
+		}
+		writeJSON(w, map[string]any{
+			"errcode": 0,
+			"errmsg":  "ok",
+			"userid":  u.Userid,
+			"name":    u.Name,
+			"department": []int64{1},
+		})
+	}
+}
+
+// GET /cgi-bin/user/simplelist?access_token=xxx[&department_id=1]
+func userSimpleListHandler(st *store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if requireToken(w, r, st) == 0 {
+			return
+		}
+		users, err := st.ListUsers()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		list := make([]map[string]any, 0, len(users))
+		for _, u := range users {
+			list = append(list, map[string]any{"userid": u.Userid, "name": u.Name})
+		}
+		writeJSON(w, map[string]any{
+			"errcode":  0,
+			"errmsg":   "ok",
+			"userlist": list,
+		})
+	}
 }
