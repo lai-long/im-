@@ -23,6 +23,11 @@
   .msg .content { white-space: pre-wrap; word-break: break-word; }
   .msg .at { color: #c0392b; font-weight: 600; }
   .msg .typing { color: #2e9e5b; font-size: 12px; }
+  .msg-img { max-width: 240px; max-height: 240px; border-radius: 6px; }
+  .news { border: 1px solid #e6e8eb; border-radius: 6px; padding: 8px 10px; margin: 4px 0; }
+  .news a { font-weight: 600; color: #1a73e8; text-decoration: none; }
+  .news-desc { color: #666; font-size: 13px; margin-top: 2px; }
+  .card { border: 1px solid #d6e4ff; background: #f5f9ff; border-radius: 6px; padding: 8px 10px; }
   footer { display: flex; gap: 8px; padding: 10px 16px; background: #fff; border-top: 1px solid #e0e0e0; }
   #input { flex: 1; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
   button { padding: 8px 18px; border: 0; border-radius: 6px; background: #3a6ea5; color: #fff; cursor: pointer; }
@@ -102,20 +107,38 @@ function render(m) {
   const div = document.createElement('div');
   div.className = 'msg';
   div.dataset.msgid = m.msgid;
-  let text = m.content.content || '';
-  if (m.msgtype === 'file' || m.msgtype === 'voice') {
-    const label = m.msgtype === 'voice' ? '语音' : '文件';
-    text = `${label}：${m.content.media_id}`;
-  }
-  // 高亮 @提及
-  text = text.replace(/(@[^\s，,。@]+)/g, '<span class="at">$1</span>');
   const tag = m.sender_type === 'bot' ? '<span class="bot-tag">bot</span>' : '';
   const time = new Date(m.ts / 1000).toLocaleTimeString();
   const typing = (m.msgtype === 'stream' && m.content && m.content.finish === false) ? ' <span class="typing">生成中…</span>' : '';
-  div.innerHTML = `<div class="meta">${tag}${m.sender} · ${time}${typing}</div><div class="content">${escapeHtml(text)}</div>`;
-  // escapeHtml 后再上色会失效，简单处理：先转义再替换
+  div.innerHTML = `<div class="meta">${tag}${m.sender} · ${time}${typing}</div><div class="content">${bodyHtml(m)}</div>`;
   $('#msgs').appendChild(div);
   $('#msgs').scrollTop = $('#msgs').scrollHeight;
+}
+
+// bodyHtml 按消息类型生成安全 HTML。
+function bodyHtml(m) {
+  const c = m.content || {};
+  const at = s => escapeHtml(s).replace(/(@[^\s，,。@]+)/g, '<span class="at">$1</span>');
+  switch (m.msgtype) {
+    case 'image':
+      return `<img class="msg-img" src="data:image/png;base64,${escapeAttr(c.base64 || '')}">`;
+    case 'news': {
+      const arts = Array.isArray(c.articles) ? c.articles : [];
+      return arts.map(a => `<div class="news"><a href="${escapeAttr(a.url || '#')}" target="_blank">${escapeHtml(a.title || '')}</a>` +
+        `<div class="news-desc">${escapeHtml(a.description || '')}</div></div>`).join('');
+    }
+    case 'template_card': {
+      const t = c.card_type || '';
+      const title = (c.main_title && c.main_title.title) || '';
+      return `<div class="card"><b>卡片·${escapeHtml(t)}</b><div>${escapeHtml(title)}</div></div>`;
+    }
+    case 'file':
+      return `<a href="/api/media/${escapeAttr(c.media_id || '')}">📎 文件 ${escapeAttr(c.media_id || '')}</a>`;
+    case 'voice':
+      return `<a href="/api/media/${escapeAttr(c.media_id || '')}">🔊 语音 ${escapeAttr(c.media_id || '')}</a>`;
+    default:
+      return at(c.content || '');
+  }
 }
 
 // renderStream 流式全量刷新：按 msgid 覆盖已有气泡，未渲染过则追加
@@ -127,6 +150,10 @@ function renderStream(m) {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+// escapeAttr 用于属性上下文（URL 等）。
+function escapeAttr(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 let ws = null, retry = 0;

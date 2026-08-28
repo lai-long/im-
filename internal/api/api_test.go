@@ -55,7 +55,7 @@ func TestWebhookSend(t *testing.T) {
 		{"markdown 正常", okURL, `{"msgtype":"markdown","markdown":{"content":"# hi"}}`, 0},
 		{"无效 key", srv.URL + "/cgi-bin/webhook/send?key=nope", `{"msgtype":"text","text":{"content":"x"}}`, 93000},
 		{"缺失 key", srv.URL + "/cgi-bin/webhook/send", `{"msgtype":"text","text":{"content":"x"}}`, 93000},
-		{"不支持 msgtype", okURL, `{"msgtype":"image","image":{"base64":"x"}}`, 40058},
+		{"不支持 msgtype", okURL, `{"msgtype":"voicecard","voicecard":{}}`, 40058},
 		{"content 为空", okURL, `{"msgtype":"text","text":{"content":""}}`, 40008},
 		{"JSON 非法", okURL, `{"msgtype":`, 40035},
 		{"text 超长", okURL, `{"msgtype":"text","text":{"content":"` + strings.Repeat("a", 2049) + `"}}`, 45002},
@@ -324,4 +324,53 @@ func postJSONCode(url, body string) (int, string) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return out.Errcode, out.Errmsg
+}
+
+// TestWebhookMsgTypes 覆盖 markdown_v2 / image / news / template_card 落群。
+func TestWebhookMsgTypes(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	csvc := core.New(st, nil)
+	mux := http.NewServeMux()
+	RegisterWebhook(mux, csvc, st)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	sendURL := srv.URL + "/cgi-bin/webhook/send?key=" + store.SeedWebhookKey
+
+	cases := []struct {
+		body    string
+		msgtype string
+	}{
+		{`{"msgtype":"markdown_v2","markdown":{"content":"**hi**"}}`, "markdown_v2"},
+		{`{"msgtype":"image","image":{"base64":"aGVsbG8=","md5":"x"}}`, "image"},
+		{`{"msgtype":"news","news":{"articles":[{"title":"t","description":"d","url":"http://x","picurl":""}]}}`, "news"},
+		{`{"msgtype":"template_card","template_card":{"card_type":"text_notice","main_title":{"title":"构建"}}}`, "template_card"},
+	}
+	for _, c := range cases {
+		code, msg := postJSONCode(sendURL, c.body)
+		if code != 0 {
+			t.Fatalf("%s 发送应成功: %s", c.msgtype, msg)
+		}
+	}
+	chats, _ := st.ListChats()
+	if len(chats) == 0 {
+		t.Fatal("无会话")
+	}
+	msgs, _ := st.ListMessages(chats[0].ID, 50)
+	got := map[string]bool{}
+	for _, m := range msgs {
+		got[m.MsgType] = true
+	}
+	for _, mt := range []string{"markdown_v2", "image", "news", "template_card"} {
+		if !got[mt] {
+			t.Fatalf("缺少 %s 消息落库", mt)
+		}
+	}
+	// 非法类型
+	if code, _ := postJSONCode(sendURL, `{"msgtype":"unknown"}`); code != 40058 {
+		t.Fatalf("未知类型应 40058, got %d", code)
+	}
 }
