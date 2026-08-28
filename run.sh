@@ -62,10 +62,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# 1. 构建（源码比二进制新时才重编）
-build() {
+# 1. 构建：先 Vite（web/src 较新或 dist 缺失时），再 go build（Go 源较新时）
+build_web() {
+  if [ ! -d web/dist ] || [ -n "$(find web/src -type f -newer web/dist/index.html -print -quit 2>/dev/null)" ]; then
+    echo "▶ 构建前端 (Vite + tsc) ..."
+    ( cd web && ([ -d node_modules ] || npm install) && npm run build ) || { echo "✗ 前端构建失败"; exit 1; }
+  else
+    echo "▶ 前端已是最新，跳过 web 构建"
+  fi
+}
+
+build_go() {
   if [ -x "$BIN" ] && [ -z "$(find cmd internal -name '*.go' -newer "$BIN" -print -quit 2>/dev/null)" ]; then
-    echo "▶ 二进制已是最新，跳过构建"
+    echo "▶ Go 二进制已是最新，跳过构建"
   else
     echo "▶ 构建 im-server ..."
     go build -o "$BIN" ./cmd/im-server
@@ -80,7 +89,8 @@ if [ "$RESET" = 1 ]; then
   fi
 fi
 
-build
+build_web
+build_go
 
 # 3. 组装启动参数
 ARGS=(-addr ":$PORT" -data "$DATA")

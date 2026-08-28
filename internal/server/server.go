@@ -2,7 +2,6 @@
 package server
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
 
@@ -14,10 +13,8 @@ import (
 	"im-/internal/core"
 	"im-/internal/store"
 	"im-/internal/ws"
+	web "im-/web"
 )
-
-//go:embed web
-var webFS embed.FS
 
 // Server 是组装好的平台实例。
 type Server struct {
@@ -86,8 +83,8 @@ func (s *Server) Handler() http.Handler {
 	// 管理控制台 API
 	admin.New(s.st, s.cfg, s.Dispatcher).Register(mux)
 
-	// 嵌入式 Web 页面（群聊客户端 / 控制台）
-	sub, _ := fs.Sub(webFS, "web")
+	// 嵌入式 Web 页面（Vite 构建产物 web/dist）：群聊客户端 / 控制台
+	sub, _ := fs.Sub(web.DistFS, "dist")
 	// 控制台页固定挂在 /admin（README/启动日志均以此地址为准）
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, sub, "admin.html")
