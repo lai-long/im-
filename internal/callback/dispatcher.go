@@ -336,7 +336,8 @@ func (d *Dispatcher) push(bot store.Bot, payload string) (string, *replyPayload)
 	return d.parseReply(bot, respBody)
 }
 
-// parseReply 解析被动回复：空/success 表示无回复；{"encrypt":...} 解密后解析。
+// parseReply 解析被动回复：空/success 表示无回复；
+// 密文模式下 body 为 {"encrypt":...} 需先解密，明文模式下 body 即回复原文。
 func (d *Dispatcher) parseReply(bot store.Bot, body []byte) (string, *replyPayload) {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" || trimmed == "success" {
@@ -344,6 +345,17 @@ func (d *Dispatcher) parseReply(bot store.Bot, body []byte) (string, *replyPaylo
 	}
 	var env struct {
 		Encrypt string `json:"encrypt"`
+	}
+	if bot.CallbackMode == "plain" {
+		// 明文模式：body 直接是回复 JSON（调试用，无签名无加密）
+		if err := json.Unmarshal(body, &env); err == nil && env.Encrypt != "" {
+			return "明文模式下被动回复不应为加密信封", nil
+		}
+		var reply replyPayload
+		if err := json.Unmarshal(body, &reply); err != nil {
+			return "被动回复 JSON 解析失败: " + err.Error(), nil
+		}
+		return "", &reply
 	}
 	if err := json.Unmarshal(body, &env); err != nil || env.Encrypt == "" {
 		return "被动回复格式非法（既非 success 也非 {\"encrypt\":...}）: " + truncate(trimmed, 200), nil

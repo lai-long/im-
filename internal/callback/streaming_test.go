@@ -3,6 +3,7 @@ package callback
 import (
 	"encoding/json"
 	"encoding/xml"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -195,4 +196,57 @@ func TestTemplateCardPassiveReply(t *testing.T) {
 		}
 	}
 	t.Fatal("template_card 未落群")
+}
+
+// TestPlainMode 覆盖明文回调模式：推送未加密 JSON、被动回复按明文解析。
+func TestPlainMode(t *testing.T) {
+	st, chat, bot := setup(t)
+	var gotPayload atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 明文模式：不应带签名参数
+		if r.URL.Query().Get("msg_signature") != "" {
+			http.Error(w, "plain mode should not sign", http.StatusBadRequest)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var p map[string]any
+		if err := json.Unmarshal(raw, &p); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		gotPayload.Store(string(raw))
+		_, _ = w.Write([]byte(mustJSON(map[string]any{"msgtype": "stream",
+			"stream": map[string]any{"id": "s", "finish": true, "content": "明文回复"}})))
+	}))
+	defer srv.Close()
+	if err := st.UpdateBotCallback(bot.ID, srv.URL, tok, aesK, "plain"); err != nil {
+		t.Fatal(err)
+	}
+
+	csvc := core.New(st, nil)
+	d := NewDispatcher(st, "http://127.0.0.1:7788", csvc)
+	csvc.OnBotMention = d.EnqueueUserMessage
+	d.Start()
+	defer d.Stop()
+
+	u, _ := st.GetUserByUserid("zhangsan")
+	if _, _, err := csvc.UserMessage(chat.ID, u.ID, "@示例机器人 明文模式"); err != nil {
+		t.Fatal(err)
+	}
+	waitTaskStatus(t, st, "done")
+
+	p, _ := gotPayload.Load().(string)
+	if !strings.Contains(p, `"msgtype":"text"`) || !strings.Contains(p, `"chattype":"group"`) {
+		t.Fatalf("明文推送内容不符: %s", p)
+	}
+	if strings.Contains(p, "encrypt") {
+		t.Fatalf("明文模式不应包含 encrypt 字段: %s", p)
+	}
+	msgs, _ := st.ListMessages(chat.ID, 200)
+	for _, m := range msgs {
+		if m.MsgType == "stream" && m.Content["content"] == "明文回复" {
+			return
+		}
+	}
+	t.Fatal("明文被动回复未落群")
 }
