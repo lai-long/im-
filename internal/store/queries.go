@@ -39,14 +39,15 @@ type Chat struct {
 	ID      int64  `json:"id"`
 	Chatid  string `json:"chatid"`
 	Name    string `json:"name"`
-	Type    string `json:"type"`     // group | direct（direct 为用户与自建应用的单聊）
+	Type    string `json:"type"`     // group | direct（用户↔自建应用）| single（用户↔机器人）
 	AgentID int64  `json:"agent_id"` // direct 会话对应的自建应用
+	BotID   int64  `json:"bot_id"`   // single 会话对应的机器人
 }
 
-// scanChatFull 读取含 type/agent_id 的会话行。
+// scanChatFull 读取含 type/agent_id/bot_id 的会话行。
 func scanChatFull(row interface{ Scan(...any) error }) (Chat, error) {
 	var c Chat
-	err := row.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
+	err := row.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID, &c.BotID)
 	return c, err
 }
 
@@ -188,8 +189,8 @@ func (s *Store) ResetCallbackTask(id int64) error {
 // GetChat 取会话。
 func (s *Store) GetChat(id int64) (Chat, error) {
 	var c Chat
-	err := s.db.QueryRow(`SELECT id, chatid, name, type, agent_id FROM chat WHERE id=?`, id).
-		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
+	err := s.db.QueryRow(`SELECT id, chatid, name, type, agent_id, bot_id FROM chat WHERE id=?`, id).
+		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID, &c.BotID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -245,7 +246,7 @@ func now() int64 { return time.Now().Unix() }
 
 // ListChats 列出全部群。
 func (s *Store) ListChats() ([]Chat, error) {
-	rows, err := s.db.Query(`SELECT id, chatid, name, type, agent_id FROM chat ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, chatid, name, type, agent_id, bot_id FROM chat ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +254,7 @@ func (s *Store) ListChats() ([]Chat, error) {
 	var out []Chat
 	for rows.Next() {
 		var c Chat
-		if err := rows.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID); err != nil {
+		if err := rows.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID, &c.BotID); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -425,7 +426,7 @@ func (s *Store) FindDirectChat(agentID, userID int64) (Chat, error) {
 		SELECT c.id, c.chatid, c.name, c.type, c.agent_id
 		FROM chat_member m JOIN chat c ON c.id = m.chat_id
 		WHERE m.user_id = ? AND c.type = 'direct' AND c.agent_id = ? LIMIT 1`, userID, agentID).
-		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
+		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID, &c.BotID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -447,4 +448,35 @@ func (s *Store) CreateDirectChat(agentID, userID int64, name string) (Chat, erro
 		return Chat{}, err
 	}
 	return s.GetChat(chatID)
+}
+
+// FindBotSingleChat 查找用户与机器人的单聊会话（chattype=single）。
+func (s *Store) FindBotSingleChat(botID, userID int64) (Chat, error) {
+	var c Chat
+	err := s.db.QueryRow(`SELECT id, chatid, name, type, agent_id, bot_id FROM chat
+		WHERE user_id=? AND type='single' AND bot_id=? LIMIT 1`, userID, botID).
+		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID, &c.BotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+// OpenBotSingleChat 打开（不存在则创建）用户与机器人的单聊会话。
+// 返回会话与一个布尔值表示是否本次新建（新建时调用方应触发"进入会话"事件）。
+func (s *Store) OpenBotSingleChat(botID, userID int64, name string) (Chat, bool, error) {
+	if c, err := s.FindBotSingleChat(botID, userID); err == nil {
+		return c, false, nil
+	}
+	res, err := s.db.Exec(`INSERT INTO chat(chatid, name, type, bot_id, created_at) VALUES(?,?,?,?,?)`,
+		NewChatID(), name, "single", botID, now())
+	if err != nil {
+		return Chat{}, false, err
+	}
+	chatID, _ := res.LastInsertId()
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO chat_member(chat_id, user_id) VALUES(?,?)`, chatID, userID); err != nil {
+		return Chat{}, false, err
+	}
+	c, err := s.GetChat(chatID)
+	return c, true, err
 }

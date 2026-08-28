@@ -50,6 +50,46 @@ func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Stor
 		writeJSON(w, chats)
 	})
 
+	// 机器人列表（客户端发起单聊用）。
+	mux.HandleFunc("GET /api/bots", func(w http.ResponseWriter, r *http.Request) {
+		bots, err := st.ListBots()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, bots)
+	})
+
+	// 发起/打开与机器人的单聊（chattype=single）；首次打开触发"进入会话"事件。
+	mux.HandleFunc("POST /api/chats/single", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Userid string `json:"userid"`
+			BotID  int64  `json:"bot_id"`
+		}
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		u, err := st.GetUserByUserid(req.Userid)
+		if err != nil {
+			http.Error(w, "unknown user", http.StatusBadRequest)
+			return
+		}
+		bot, err := st.GetBot(req.BotID)
+		if err != nil {
+			http.Error(w, "unknown bot", http.StatusBadRequest)
+			return
+		}
+		chat, created, err := st.OpenBotSingleChat(bot.ID, u.ID, bot.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if created && coreSvc.OnBotEntry != nil {
+			coreSvc.OnBotEntry(chat, bot, u)
+		}
+		writeJSON(w, chat)
+	})
+
 	mux.HandleFunc("POST /api/send", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Userid string `json:"userid"`

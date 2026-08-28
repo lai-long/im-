@@ -132,6 +132,72 @@ func (d *Dispatcher) EnqueueUserMessage(msg store.Message, bot store.Bot) {
 	}
 }
 
+// EnqueueBotSingleMessage 用户在"用户↔机器人"单聊发消息时创建推送任务。
+// 与群内 @机器人 同走智能机器人 JSON 回调，但 chattype=single 且不带 chatid。
+func (d *Dispatcher) EnqueueBotSingleMessage(msg store.Message, bot store.Bot) {
+	user, err := d.st.GetUserByID(msg.SenderID)
+	if err != nil {
+		return
+	}
+	responseCode := store.NewRandomString(24)
+	payload := map[string]any{
+		"msgid":    msg.Msgid,
+		"aibotid":  bot.Aibotid,
+		"chattype": "single",
+		"from":     map[string]any{"userid": user.Userid},
+		"msgtype":  msg.MsgType,
+		"msg":      msg.Content,
+		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s",
+			d.base, responseCode),
+	}
+	switch msg.MsgType {
+	case "text":
+		payload["text"] = msg.Content
+	case "markdown":
+		payload["markdown"] = msg.Content
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if _, err := d.st.CreateCallbackTask(msg.ID, bot.ID, "bot", string(raw), responseCode,
+		time.Now().Add(store.ResponseCodeTTL).Unix()); err != nil {
+		return
+	}
+	d.wakeLoop()
+}
+
+// EnqueueBotEntry 用户首次进入与机器人的单聊时，发送"进入会话"事件回调，
+// 接入方可借此下发欢迎语（被动回复落回单聊）。
+func (d *Dispatcher) EnqueueBotEntry(chat store.Chat, bot store.Bot, user store.User) {
+	responseCode := store.NewRandomString(24)
+	payload := map[string]any{
+		"msgid":    store.NewMsgID(),
+		"aibotid":  bot.Aibotid,
+		"chattype": "single",
+		"from":     map[string]any{"userid": user.Userid},
+		"msgtype":  "event",
+		"event":    "enter_agent",
+		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s",
+			d.base, responseCode),
+	}
+	// 事件不产生用户消息，构造一条占位消息用于 reply 落群定位
+	holder, err := d.st.InsertMessage(chat.ID, user.ID, "user", "event",
+		map[string]any{"event": "enter_agent"}, nil)
+	if err != nil {
+		return
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if _, err := d.st.CreateCallbackTask(holder.ID, bot.ID, "bot", string(raw), responseCode,
+		time.Now().Add(store.ResponseCodeTTL).Unix()); err != nil {
+		return
+	}
+	d.wakeLoop()
+}
+
 // EnqueueAgentMessage 用户在"用户↔自建应用"单聊发消息时创建推送任务（XML 回调）。
 func (d *Dispatcher) EnqueueAgentMessage(msg store.Message, agent store.Agent) {
 	user, err := d.st.GetUserByID(msg.SenderID)

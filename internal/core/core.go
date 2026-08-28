@@ -18,6 +18,10 @@ type Service struct {
 	OnBotMention func(msg store.Message, bot store.Bot)
 	// OnAgentDirect 在用户于"用户↔自建应用"单聊发消息时触发（XML 回调）。
 	OnAgentDirect func(msg store.Message, agentID int64)
+	// OnBotSingle 在用户于"用户↔机器人"单聊发消息时触发（智能机器人单聊回调）。
+	OnBotSingle func(msg store.Message, bot store.Bot)
+	// OnBotEntry 在用户首次进入与机器人的单聊时触发（"进入会话"事件 → 欢迎语）。
+	OnBotEntry func(chat store.Chat, bot store.Bot, user store.User)
 }
 
 // New 创建消息核心。broadcast 为空时不推送。
@@ -104,6 +108,16 @@ func (s *Service) UserMessage(chatID, userID int64, text string) (store.Message,
 			s.OnAgentDirect(m, chat.AgentID)
 		}
 		return m, nil, nil
+	}
+
+	// 机器人单聊（用户↔机器人）：直接触发智能机器人回调，无需 @ 提及
+	if chat, err := s.st.GetChat(chatID); err == nil && chat.Type == "single" && chat.BotID != 0 {
+		if b, berr := s.st.GetBot(chat.BotID); berr == nil {
+			if s.OnBotSingle != nil {
+				s.OnBotSingle(m, b)
+			}
+			return m, []store.Bot{b}, nil
+		}
 	}
 
 	bots, err := s.st.ChatBots(chatID)
