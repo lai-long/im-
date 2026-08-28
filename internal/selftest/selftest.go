@@ -4,6 +4,7 @@
 package selftest
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -56,7 +57,7 @@ func Run(dataDir string) int {
 		fmt.Printf("[FAIL] 读取示例机器人: %v\n", err)
 		return 1
 	}
-	mock := newMockReceiver(bot.CallbackToken, bot.CallbackAESKey)
+	mock := newMockReceiver(bot.CallbackToken, bot.CallbackAESKey, true) // 流式模式：覆盖 M1b 流式轮询
 
 	// —— 平台：真实 HTTP 路由 + 回调分发器 ——
 	cfg := &config.Config{Addr: "127.0.0.1:0", DataDir: dir}
@@ -94,12 +95,16 @@ func Run(dataDir string) int {
 		fmt.Printf("[FAIL] 读取用户: %v\n", err)
 		return 1
 	}
-	if _, _, err := srv.Core.UserMessage(chat.ID, u.ID, "@"+bot.Name+" ping"); err != nil {
+	userMsg, _, err := srv.Core.UserMessage(chat.ID, u.ID, "@"+bot.Name+" ping")
+	if err != nil {
 		add("用户 @bot 发消息", false, err.Error())
 	} else {
 		add("用户 @bot 发消息", true, "已生成回调任务")
-		reply, ok := waitFor(chat.ID, st, "stream", 5*time.Second)
-		add("被动回复落群", ok, reply)
+		// 流式：首轮 finish=false → 平台轮询 → 最终 finish=true（覆盖 M1b）
+		final, ok := waitForStreamFinal(chat.ID, st, 5*time.Second)
+		add("流式回复落群（finish=true）", ok, final)
+		add("流式刷新为同一条消息", countMessages(st, chat.ID, "stream") == 1,
+			fmt.Sprintf("stream 消息数=%d（覆盖式刷新）", countMessages(st, chat.ID, "stream")))
 		add("回调 JSON 字段完整", mock.payloadOK.Load() == 1, "msgid/aibotid/chatid/chattype/from/response_url/msgtype/text")
 	}
 
@@ -119,8 +124,33 @@ func Run(dataDir string) int {
 		add("主动回复落群", ok, "markdown + 引用")
 	}
 
+	// 5. template_card 主动回复（response_url）
+	// 上一步的 code 已占用，新建一条任务验证卡片回复
+	cardCode := store.NewRandomString(24)
+	{
+		tk, err := st.CreateCallbackTask(userMsg.ID, bot.ID, "{}", cardCode, time.Now().Add(time.Hour).Unix())
+		if err != nil {
+			add("template_card 主动回复", false, err.Error())
+		} else {
+			c, m := postJSON(plat.URL+"/cgi-bin/aibot/response?response_code="+url.QueryEscape(tk.ResponseCode),
+				`{"msgtype":"template_card","template_card":{"card_type":"text_notice","main_title":{"title":"构建成功"}}}`)
+			add("template_card 主动回复", c == 0, m)
+			add("template_card 落群", countMessages(st, chat.ID, "template_card") == 1, "卡片消息数=1")
+		}
+	}
+
+	// 6. TLS 自签证书（M1b）
+	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
+	if err != nil {
+		add("TLS 自签证书", false, err.Error())
+	} else if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+		add("TLS 自签证书", false, err.Error())
+	} else {
+		add("TLS 自签证书", true, "生成并可加载（数据目录复用）")
+	}
+
 	// 输出
-	fmt.Println("\n=== 回环自测（M1a 验收全链路）===")
+	fmt.Println("\n=== 回环自测（M1a + M1b 验收全链路）===")
 	failed := 0
 	for _, c := range checks {
 		status := "PASS"
@@ -173,13 +203,15 @@ func waitFor(chatID int64, st *store.Store, msgType string, timeout time.Duratio
 
 // mockReceiver 模拟"接入方"服务端，用企微官方加解密库实现接收侧。
 type mockReceiver struct {
-	URL       string
-	crypt     *official.WXBizMsgCrypt
-	payloadOK atomic.Int32
+	URL        string
+	crypt      *official.WXBizMsgCrypt
+	payloadOK  atomic.Int32
+	pushes     atomic.Int32
+	streamMode bool // true：首轮 finish=false，刷新轮 finish=true（验证流式轮询）
 }
 
-func newMockReceiver(token, aesKey string) *mockReceiver {
-	m := &mockReceiver{crypt: official.NewWXBizMsgCrypt(token, aesKey, "", official.XmlType)}
+func newMockReceiver(token, aesKey string, streamMode bool) *mockReceiver {
+	m := &mockReceiver{crypt: official.NewWXBizMsgCrypt(token, aesKey, "", official.XmlType), streamMode: streamMode}
 	srv := httptest.NewServer(http.HandlerFunc(m.handle))
 	m.URL = srv.URL
 	return m
@@ -209,9 +241,15 @@ func (m *mockReceiver) handle(w http.ResponseWriter, r *http.Request) {
 		if payloadFieldsOK(msg) {
 			m.payloadOK.Store(1)
 		}
-		// 被动回复：一次性 stream（finish=true）
+		// 被动回复：一次性 stream（finish=true）；streamMode 下首轮 finish=false 触发轮询
+		n := m.pushes.Add(1)
+		finish := true
+		content := "**pong**"
+		if m.streamMode && n == 1 {
+			finish, content = false, "思考中…"
+		}
 		reply := map[string]any{"msgtype": "stream",
-			"stream": map[string]any{"id": "selftest", "finish": true, "content": "**pong**"}}
+			"stream": map[string]any{"id": "selftest", "finish": finish, "content": content}}
 		raw, cerr := m.crypt.EncryptMsg(mustJSON(reply), q.Get("timestamp"), q.Get("nonce"))
 		if cerr != nil {
 			http.Error(w, "encrypt fail", http.StatusBadRequest)
@@ -251,4 +289,34 @@ func payloadFieldsOK(msg []byte) bool {
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// waitForStreamFinal 等待流式消息刷到 finish=true，返回最终内容。
+func waitForStreamFinal(chatID int64, st *store.Store, timeout time.Duration) (string, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		msgs, _ := st.ListMessages(chatID, 200)
+		for _, m := range msgs {
+			if m.MsgType == "stream" {
+				if fin, ok := m.Content["finish"].(bool); ok && fin {
+					b, _ := json.Marshal(m.Content)
+					return string(b), true
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return "", false
+}
+
+// countMessages 统计指定类型的消息条数。
+func countMessages(st *store.Store, chatID int64, msgType string) int {
+	msgs, _ := st.ListMessages(chatID, 200)
+	n := 0
+	for _, m := range msgs {
+		if m.MsgType == msgType {
+			n++
+		}
+	}
+	return n
 }
