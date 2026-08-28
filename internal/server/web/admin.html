@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本地 IM · 控制台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f2f3f5; color: #222; }
+  header { padding: 12px 20px; background: #2f4f6f; color: #fff; display: flex; gap: 16px; align-items: center; }
+  header a { color: #cfe3ff; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px 20px 48px; }
+  section { background: #fff; border: 1px solid #e3e6ea; border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
+  h2 { margin: 0 0 10px; font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #666; font-weight: 600; }
+  code { background: #f4f6f8; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+  input, select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 5px; }
+  input[type=text] { width: 320px; }
+  button { padding: 6px 12px; border: 0; border-radius: 5px; background: #2f4f6f; color: #fff; cursor: pointer; }
+  button.ghost { background: #7d8ea0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 12px; color: #fff; }
+  .ok { background: #2e9e5b; }
+  .bad { background: #c0392b; }
+  .muted { color: #888; }
+  pre { background: #f7f8fa; padding: 8px; border-radius: 5px; overflow-x: auto; margin: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <strong>本地 IM 控制台</strong>
+  <a href="/">← 回到群聊</a>
+  <span class="muted" id="hint"></span>
+</header>
+<main>
+  <section>
+    <h2>机器人</h2>
+    <div id="bots"></div>
+    <div class="row">
+      <input id="newBotName" type="text" placeholder="新机器人名称">
+      <button onclick="createBot()">创建机器人</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>回调任务（推送状态 / 重放）</h2>
+    <div class="row">
+      <select id="taskStatus">
+        <option value="">全部</option>
+        <option value="pending">pending</option>
+        <option value="processing">processing</option>
+        <option value="done">done</option>
+        <option value="dead">dead</option>
+      </select>
+      <button onclick="loadTasks()">刷新</button>
+    </div>
+    <div id="tasks"></div>
+  </section>
+
+  <section>
+    <h2>消息流水</h2>
+    <div class="row"><button onclick="loadMessages()">刷新</button></div>
+    <div id="msgs"></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const jpost = async (u, body) => (await fetch(u, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
+const jget = async u => (await fetch(u)).json();
+
+async function loadBots() {
+  const bots = await jget('/admin/bots');
+  const chats = await jget('/admin/chats');
+  $('#bots').innerHTML = bots.map(b => `
+    <table>
+      <tr><th style="width:120px">名称</th><td>${b.name}${b.callback_verified
+        ? ' <span class="badge ok">回调已验证</span>' : ' <span class="badge bad">回调未验证</span>'}</td></tr>
+      <tr><th>aibotid</th><td><code>${b.aibotid}</code></td></tr>
+      <tr><th>Token</th><td><code>${b.callback_token}</code></td></tr>
+      <tr><th>EncodingAESKey</th><td><code>${b.callback_aes_key}</code></td></tr>
+      <tr><th>回调 URL</th><td>${b.callback_url ? `<code>${b.callback_url}</code>（${b.callback_mode}）` : '<span class="muted">未配置</span>'}</td></tr>
+      <tr><th>webhook</th><td>${(b.keys||[]).map(k => `<div>${k.name}: <code>/cgi-bin/webhook/send?key=${k.webhook_key}</code></div>`).join('') || '<span class="muted">未入群</span>'}</td></tr>
+      <tr><th>操作</th><td>
+        <div class="row">
+          <input type="text" id="url-${b.id}" placeholder="回调 URL，如 http://127.0.0.1:9000/wecom" value="${b.callback_url}">
+          <select id="mode-${b.id}">
+            <option value="encrypted"${b.callback_mode==='encrypted'?' selected':''}>encrypted</option>
+            <option value="plain"${b.callback_mode==='plain'?' selected':''}>plain</option>
+          </select>
+          <button onclick="saveCallback(${b.id})">保存并验证</button>
+          <button class="ghost" onclick="joinChat(${b.id})">加入首个群</button>
+        </div>
+        <pre id="res-${b.id}" class="muted"></pre>
+      </td></tr>
+    </table><hr>`).join('');
+  window._chats = chats;
+}
+
+async function createBot() {
+  const name = $('#newBotName').value.trim();
+  if (!name) return;
+  await jpost('/admin/bots', { name });
+  $('#newBotName').value = '';
+  loadBots();
+}
+
+async function saveCallback(id) {
+  const url = $('#url-' + id).value.trim();
+  const mode = $('#mode-' + id).value;
+  const r = await jpost('/admin/bots/callback', { bot_id: id, url, mode });
+  $('#res-' + id).textContent = r.verified ? '验证通过' : '验证失败: ' + (r.error || '');
+  loadBots();
+}
+
+async function joinChat(id) {
+  if (!window._chats || !window._chats.length) return;
+  await jpost('/admin/chats/join', { chat_id: window._chats[0].id, bot_id: id });
+  loadBots();
+}
+
+async function loadTasks() {
+  const status = $('#taskStatus').value;
+  const tasks = await jget('/admin/tasks' + (status ? '?status=' + status : ''));
+  $('#tasks').innerHTML = tasks.length ? `<table>
+    <tr><th>ID</th><th>状态</th><th>尝试</th><th>机器人</th><th>最近错误</th><th>操作</th></tr>
+    ${tasks.map(t => `<tr>
+      <td>${t.id}</td><td>${t.status}</td><td>${t.attempt}</td><td>${t.bot_id}</td>
+      <td class="muted">${t.last_error || ''}</td>
+      <td><button class="ghost" onclick="replay(${t.id})">重放</button></td>
+    </tr>`).join('')}</table>` : '<div class="muted">无</div>';
+}
+
+async function replay(id) {
+  await jpost('/admin/tasks/replay', { id });
+  loadTasks();
+}
+
+async function loadMessages() {
+  const msgs = await jget('/admin/messages?limit=200');
+  $('#msgs').innerHTML = msgs.length ? `<table>
+    <tr><th>msgid</th><th>发送者</th><th>类型</th><th>内容</th><th>提及</th></tr>
+    ${msgs.map(m => `<tr>
+      <td><code>${m.msgid}</code></td>
+      <td>${m.sender}${m.sender_type === 'bot' ? ' (bot)' : ''}</td>
+      <td>${m.msgtype}</td>
+      <td><pre>${JSON.stringify(m.content)}</pre></td>
+      <td class="muted">${(m.mentioned || []).join(', ')}</td>
+    </tr>`).join('')}</table>` : '<div class="muted">无</div>';
+}
+
+loadBots(); loadTasks(); loadMessages();
+setInterval(() => { loadTasks(); loadMessages(); }, 4000);
+</script>
+</body>
+</html>

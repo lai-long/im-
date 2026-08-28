@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 
+	"im-/internal/admin"
 	"im-/internal/api"
 	"im-/internal/callback"
 	"im-/internal/config"
@@ -50,7 +51,10 @@ func (s *Server) Handler() http.Handler {
 	api.RegisterClientAPI(mux, s.Core, s.st)
 	s.hub.Register(mux)
 
-	// 嵌入式 Web 客户端
+	// 管理控制台 API
+	admin.New(s.st, s.cfg, s.Dispatcher).Register(mux)
+
+	// 嵌入式 Web 页面（群聊客户端 / 控制台）
 	sub, _ := fs.Sub(webFS, "web")
 	mux.Handle("GET /", http.FileServer(http.FS(sub)))
 

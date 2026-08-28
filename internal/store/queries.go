@@ -17,28 +17,28 @@ type Corp struct {
 }
 
 type Bot struct {
-	ID             int64
-	CorpID         int64
-	Aibotid        string
-	Name           string
-	CallbackURL    string
-	CallbackToken  string
-	CallbackAESKey string
-	CallbackMode   string // plain | encrypted
-	CallbackVerif  bool
+	ID             int64  `json:"id"`
+	CorpID         int64  `json:"corp_id"`
+	Aibotid        string `json:"aibotid"`
+	Name           string `json:"name"`
+	CallbackURL    string `json:"callback_url"`
+	CallbackToken  string `json:"callback_token"`
+	CallbackAESKey string `json:"callback_aes_key"`
+	CallbackMode   string `json:"callback_mode"` // plain | encrypted
+	CallbackVerif  bool   `json:"callback_verified"`
 }
 
 type User struct {
-	ID     int64
-	CorpID int64
-	Userid string
-	Name   string
+	ID     int64  `json:"id"`
+	CorpID int64  `json:"corp_id"`
+	Userid string `json:"userid"`
+	Name   string `json:"name"`
 }
 
 type Chat struct {
-	ID     int64
-	Chatid string
-	Name   string
+	ID     int64  `json:"id"`
+	Chatid string `json:"chatid"`
+	Name   string `json:"name"`
 }
 
 func scanBot(row interface{ Scan(...any) error }) (Bot, error) {
@@ -96,6 +96,84 @@ func (s *Store) GetChatByWebhookKey(key string) (Chat, Bot, error) {
 		return chat, bot, ErrNotFound
 	}
 	return chat, bot, err
+}
+
+// CreateBot 创建机器人，生成 aibotid 与回调三元组。
+func (s *Store) CreateBot(corpID int64, name string) (Bot, error) {
+	res, err := s.db.Exec(`INSERT INTO bot(corp_id, aibotid, name, callback_token, callback_aes_key, created_at)
+		VALUES(?,?,?,?,?,?)`, corpID, NewAibotid(), name, NewToken(), NewEncodingAESKey(), now())
+	if err != nil {
+		return Bot{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetBot(id)
+}
+
+// ListBots 列出全部机器人。
+func (s *Store) ListBots() ([]Bot, error) {
+	rows, err := s.db.Query(`SELECT ` + botCols + ` FROM bot ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Bot
+	for rows.Next() {
+		b, err := scanBot(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// AddBotToChat 把机器人拉进群并生成该群的 webhook key（key 按群分配）。
+// 已在同一群时返回既有 key。
+func (s *Store) AddBotToChat(chatID, botID int64) (string, error) {
+	var key string
+	err := s.db.QueryRow(`SELECT webhook_key FROM chat_bot WHERE chat_id=? AND bot_id=?`, chatID, botID).Scan(&key)
+	if err == nil {
+		return key, nil
+	}
+	key = NewUUID()
+	if _, err := s.db.Exec(`INSERT INTO chat_bot(chat_id, bot_id, webhook_key) VALUES(?,?,?)`, chatID, botID, key); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+// ChatBotKey 是机器人在某群的 webhook key 条目（控制台展示）。
+type ChatBotKey struct {
+	ChatID int64  `json:"chat_id"`
+	Name   string `json:"name"`
+	Key    string `json:"webhook_key"`
+}
+
+// ChatBotKeys 列出机器人所在群及其 webhook key。
+func (s *Store) ChatBotKeys(botID int64) ([]ChatBotKey, error) {
+	rows, err := s.db.Query(`
+		SELECT c.id, c.name, cb.webhook_key FROM chat_bot cb
+		JOIN chat c ON c.id = cb.chat_id WHERE cb.bot_id = ? ORDER BY c.id`, botID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatBotKey
+	for rows.Next() {
+		var r ChatBotKey
+		if err := rows.Scan(&r.ChatID, &r.Name, &r.Key); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ResetCallbackTask 把任务复位为 pending 以便重放（控制台手动重推）。
+func (s *Store) ResetCallbackTask(id int64) error {
+	_, err := s.db.Exec(`UPDATE callback_task SET status='pending', attempt=0, next_retry_at=0,
+		last_error='', updated_at=? WHERE id=?`, now(), id)
+	return err
 }
 
 // GetChat 取群。
@@ -182,4 +260,10 @@ func (s *Store) FirstCorp() (Corp, error) {
 		return c, ErrNotFound
 	}
 	return c, err
+}
+
+// MarkCallbackVerified 标记回调配置已通过 URL 验证。
+func (s *Store) MarkCallbackVerified(botID int64) error {
+	_, err := s.db.Exec(`UPDATE bot SET callback_verified=1 WHERE id=?`, botID)
+	return err
 }
