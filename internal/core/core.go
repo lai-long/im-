@@ -16,6 +16,8 @@ type Service struct {
 	Broadcast func(ev Event)
 	// OnBotMention 在用户消息命中群内机器人时触发（回调分发器接入点）。
 	OnBotMention func(msg store.Message, bot store.Bot)
+	// OnAgentDirect 在用户于"用户↔自建应用"单聊发消息时触发（XML 回调）。
+	OnAgentDirect func(msg store.Message, agentID int64)
 }
 
 // New 创建消息核心。broadcast 为空时不推送。
@@ -95,6 +97,14 @@ func (s *Service) UserMessage(chatID, userID int64, text string) (store.Message,
 		return m, nil, err
 	}
 	s.broadcast(m)
+
+	// 单聊（用户↔自建应用）直接触发应用的 XML 回调，无需 @ 提及
+	if chat, err := s.st.GetChat(chatID); err == nil && chat.Type == "direct" && chat.AgentID != 0 {
+		if s.OnAgentDirect != nil {
+			s.OnAgentDirect(m, chat.AgentID)
+		}
+		return m, nil, nil
+	}
 
 	bots, err := s.st.ChatBots(chatID)
 	if err != nil {

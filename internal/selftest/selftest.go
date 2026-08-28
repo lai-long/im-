@@ -128,7 +128,7 @@ func Run(dataDir string) int {
 	// 上一步的 code 已占用，新建一条任务验证卡片回复
 	cardCode := store.NewRandomString(24)
 	{
-		tk, err := st.CreateCallbackTask(userMsg.ID, bot.ID, "{}", cardCode, time.Now().Add(time.Hour).Unix())
+		tk, err := st.CreateCallbackTask(userMsg.ID, bot.ID, "bot", "{}", cardCode, time.Now().Add(time.Hour).Unix())
 		if err != nil {
 			add("template_card 主动回复", false, err.Error())
 		} else {

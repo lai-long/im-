@@ -95,12 +95,12 @@ func TestResponseURL(t *testing.T) {
 	}
 
 	// 一条有效 code（1 小时）与一条过期 code
-	task, err := st.CreateCallbackTask(msg.ID, bot.ID, "{}", "code-ok",
+	task, err := st.CreateCallbackTask(msg.ID, bot.ID, "bot", "{}", "code-ok",
 		time.Now().Add(time.Hour).Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateCallbackTask(msg.ID, bot.ID, "{}", "code-expired",
+	if _, err := st.CreateCallbackTask(msg.ID, bot.ID, "bot", "{}", "code-expired",
 		time.Now().Add(-time.Minute).Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -172,13 +172,16 @@ func TestResponseURLTemplateCard(t *testing.T) {
 	chat, bot, _ := st.GetChatByWebhookKey(store.SeedWebhookKey)
 	u, _ := st.GetUserByUserid("zhangsan")
 	msg, _, _ := csvc.UserMessage(chat.ID, u.ID, "@示例机器人 构建结果")
-	task, _ := st.CreateCallbackTask(msg.ID, bot.ID, "{}", "code-card", time.Now().Add(time.Hour).Unix())
+	task, _ := st.CreateCallbackTask(msg.ID, bot.ID, "bot", "{}", "code-card", time.Now().Add(time.Hour).Unix())
 
 	post := func(body string) map[string]any {
 		req, _ := http.NewRequest(http.MethodPost,
 			srv.URL+"/cgi-bin/aibot/response?response_code="+task.ResponseCode, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		resp, _ := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
 		defer resp.Body.Close()
 		var out map[string]any
 		_ = json.NewDecoder(resp.Body).Decode(&out)

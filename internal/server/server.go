@@ -33,6 +33,13 @@ func New(cfg *config.Config, st *store.Store) *Server {
 	s.Core = core.New(st, func(ev core.Event) { s.hub.Broadcast(ev) })
 	s.Dispatcher = callback.NewDispatcher(st, cfg.ExternalBaseURL(), s.Core)
 	s.Core.OnBotMention = s.Dispatcher.EnqueueUserMessage
+	s.Core.OnAgentDirect = func(m store.Message, agentID int64) {
+		agent, err := s.st.GetAgent(agentID)
+		if err != nil {
+			return
+		}
+		s.Dispatcher.EnqueueAgentMessage(m, agent)
+	}
 	return s
 }
 

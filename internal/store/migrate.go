@@ -127,6 +127,8 @@ CREATE TABLE token(
 );
 CREATE INDEX idx_token_value ON token(access_token);
 `,
+	// v4：回调任务区分目标（机器人 / 自建应用）
+	`ALTER TABLE callback_task ADD COLUMN target_type TEXT NOT NULL DEFAULT 'bot'; -- bot | agent`,
 }
 
 // migrate 依次执行未应用的迁移。

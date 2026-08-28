@@ -14,6 +14,8 @@ type CallbackTask struct {
 	BotID        int64  `json:"bot_id"`
 	Payload      string `json:"payload"` // 加密前明文 JSON
 	ResponseCode string `json:"response_code"`
+	TargetType   string `json:"target_type"` // bot | agent（回调目标类型）
+	TargetID     int64  `json:"target_id"`   // bot 或 agent 的 id
 	StreamID     string `json:"stream_id"`
 	StreamMsgID  int64  `json:"stream_message_id"` // 流式消息（全量刷新目标）
 	StreamFin    bool   `json:"stream_finished"`
@@ -27,15 +29,16 @@ type CallbackTask struct {
 // ResponseCodeTTL 是 response_url 的有效期（企微：1 小时）。
 const ResponseCodeTTL = time.Hour
 
-// CreateCallbackTask 为一条用户消息对某机器人创建推送任务。
+// CreateCallbackTask 为一条用户消息创建推送任务。
+// targetType 为 "bot"（智能机器人）或 "agent"（自建应用，走 XML 回调）；
 // payload 需已包含 response_url；responseCode/过期时间由调用方生成后传入。
-func (s *Store) CreateCallbackTask(messageID, botID int64, payload, responseCode string, expireAt int64) (CallbackTask, error) {
-	t := CallbackTask{MessageID: messageID, BotID: botID, Payload: payload,
+func (s *Store) CreateCallbackTask(messageID, targetID int64, targetType, payload, responseCode string, expireAt int64) (CallbackTask, error) {
+	t := CallbackTask{MessageID: messageID, TargetID: targetID, TargetType: targetType, Payload: payload,
 		ResponseCode: responseCode, Status: "pending"}
 	res, err := s.db.Exec(`INSERT INTO callback_task
-		(message_id, bot_id, payload, response_code, response_expire_at, status, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?)`,
-		messageID, botID, payload, responseCode, expireAt, "pending", now(), now())
+		(message_id, bot_id, target_type, payload, response_code, response_expire_at, status, created_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?)`,
+		messageID, targetID, targetType, payload, responseCode, expireAt, "pending", now(), now())
 	if err != nil {
 		return t, err
 	}
@@ -49,12 +52,13 @@ func (s *Store) NextPendingTask() (CallbackTask, error) {
 	var t CallbackTask
 	var fin int
 	err := s.db.QueryRow(`SELECT id, message_id, bot_id, payload, response_code,
-		stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at, last_error
+		target_type, stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at, last_error
 		FROM callback_task WHERE status IN ('pending','streaming') AND next_retry_at <= ?
 		ORDER BY id LIMIT 1`, now()).
 		Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
+			&t.TargetType, &t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
 	t.StreamFin = fin == 1
+	t.TargetID = t.BotID
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -131,8 +135,9 @@ func (s *Store) ListCallbackTasks(status string, limit int) ([]CallbackTask, err
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	q := `SELECT id, message_id, bot_id, payload, response_code, stream_id, stream_message_id,
-		stream_finished, status, attempt, next_retry_at, created_at, last_error FROM callback_task`
+	q := `SELECT id, message_id, bot_id, payload, response_code, target_type, stream_id,
+		stream_message_id, stream_finished, status, attempt, next_retry_at, created_at,
+		last_error FROM callback_task`
 	var args []any
 	if status != "" {
 		q += ` WHERE status=?`
@@ -150,10 +155,11 @@ func (s *Store) ListCallbackTasks(status string, limit int) ([]CallbackTask, err
 		var t CallbackTask
 		var fin int
 		if err := rows.Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError); err != nil {
+			&t.TargetType, &t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError); err != nil {
 			return nil, err
 		}
 		t.StreamFin = fin == 1
+		t.TargetID = t.BotID
 		out = append(out, t)
 	}
 	return out, nil
@@ -164,11 +170,12 @@ func (s *Store) ValidResponseTask(code string) (CallbackTask, error) {
 	var t CallbackTask
 	var fin int
 	err := s.db.QueryRow(`SELECT id, message_id, bot_id, payload, response_code,
-		stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at,
+		target_type, stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at,
 		last_error FROM callback_task WHERE response_code=?`, code).
 		Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
+			&t.TargetType, &t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
 	t.StreamFin = fin == 1
+	t.TargetID = t.BotID
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
 	}
