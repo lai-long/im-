@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,4 +211,117 @@ func TestResponseURLTemplateCard(t *testing.T) {
 		}
 	}
 	t.Fatal("template_card 未落群")
+}
+
+// TestUploadMedia 覆盖 webhook/upload_media 与 file 消息发送。
+func TestUploadMedia(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	csvc := core.New(st, nil)
+	mux := http.NewServeMux()
+	RegisterWebhook(mux, csvc, st)
+	RegisterUploadMedia(mux, st)
+	mux.HandleFunc("GET /api/media/{media_id}", func(w http.ResponseWriter, r *http.Request) {
+		serveMedia(w, st, r.PathValue("media_id"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	base := srv.URL + "/cgi-bin/webhook/upload_media?key=" + store.SeedWebhookKey
+
+	// 类型非法
+	code, _ := uploadFile(t, base+"&type=image", "a.txt", []byte("x"))
+	if code != 40004 {
+		t.Fatalf("非法类型应返回 40004, got %d", code)
+	}
+
+	// 正常上传
+	payload := []byte("hello media")
+	code, out := uploadFile(t, base+"&type=file", "note.txt", payload)
+	if code != 0 {
+		t.Fatalf("上传应成功: %v", out)
+	}
+	mediaID, _ := out["media_id"].(string)
+	if mediaID == "" {
+		t.Fatalf("缺少 media_id: %v", out)
+	}
+
+	// 下载内容一致
+	resp, err := http.Get(srv.URL + "/api/media/" + mediaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, len(payload))
+	n, _ := resp.Body.Read(body)
+	resp.Body.Close()
+	if string(body[:n]) != "hello media" {
+		t.Fatalf("下载内容不符: %q", body[:n])
+	}
+
+	// 以 file 消息发送
+	sendCode, msg := postJSONCode(srv.URL+"/cgi-bin/webhook/send?key="+store.SeedWebhookKey,
+		fmt.Sprintf(`{"msgtype":"file","file":{"media_id":%q}}`, mediaID))
+	if sendCode != 0 {
+		t.Fatalf("file 消息发送失败: %s", msg)
+	}
+	// 不存在的 media_id
+	badCode, _ := postJSONCode(srv.URL+"/cgi-bin/webhook/send?key="+store.SeedWebhookKey,
+		`{"msgtype":"file","file":{"media_id":"nope"}}`)
+	if badCode != 40007 {
+		t.Fatalf("未知 media_id 应返回 40007, got %d", badCode)
+	}
+}
+
+// uploadFile 以 multipart 上传文件，返回 errcode 与响应。
+func uploadFile(t *testing.T, url, filename string, content []byte) (int, map[string]any) {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	part, err := w.CreateFormFile("media", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, url, &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if v, ok := out["errcode"].(float64); ok {
+		return int(v), out
+	}
+	return -1, out
+}
+
+// postJSONCode 发送 JSON POST，返回 errcode 与 errmsg。
+func postJSONCode(url, body string) (int, string) {
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return -1, err.Error()
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return -1, err.Error()
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Errcode int    `json:"errcode"`
+		Errmsg  string `json:"errmsg"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out.Errcode, out.Errmsg
 }

@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"im-/internal/store"
 )
 
 // writeErrcode 以企微错误结构应答。
@@ -44,3 +46,18 @@ func atoiDefault(s string, def int) int {
 
 // unixNow 返回当前秒级时间戳。
 func unixNow() int64 { return time.Now().Unix() }
+
+// serveMedia 输出素材文件内容。
+func serveMedia(w http.ResponseWriter, st *store.Store, mediaID string) {
+	m, err := st.GetMedia(mediaID)
+	if err != nil {
+		writeErrcode(w, 40007, "invalid media_id")
+		return
+	}
+	http.ServeFile(w, newRequest(), m.FilePath)
+}
+
+func newRequest() *http.Request {
+	r, _ := http.NewRequest(http.MethodGet, "/", nil)
+	return r
+}

@@ -51,6 +51,15 @@ func RegisterAgentAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 		})
 	})
 
+	// GET /cgi-bin/media/get?access_token=xxx&media_id=yyy：素材下载（自建应用形态）
+	mux.HandleFunc("GET /cgi-bin/media/get", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := st.ValidateToken(r.URL.Query().Get("access_token")); err != nil {
+			writeErrcode(w, errcodeInvalidToken, "invalid access_token")
+			return
+		}
+		serveMedia(w, st, r.URL.Query().Get("media_id"))
+	})
+
 	mux.HandleFunc("POST /cgi-bin/message/send", func(w http.ResponseWriter, r *http.Request) {
 		tk := r.URL.Query().Get("access_token")
 		if tk == "" {

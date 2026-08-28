@@ -103,6 +103,10 @@ function render(m) {
   div.className = 'msg';
   div.dataset.msgid = m.msgid;
   let text = m.content.content || '';
+  if (m.msgtype === 'file' || m.msgtype === 'voice') {
+    const label = m.msgtype === 'voice' ? '语音' : '文件';
+    text = `${label}：${m.content.media_id}`;
+  }
   // 高亮 @提及
   text = text.replace(/(@[^\s，,。@]+)/g, '<span class="at">$1</span>');
   const tag = m.sender_type === 'bot' ? '<span class="bot-tag">bot</span>' : '';

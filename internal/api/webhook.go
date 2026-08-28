@@ -34,6 +34,12 @@ type webhookReq struct {
 	Markdown *struct {
 		Content string `json:"content"`
 	} `json:"markdown"`
+	File *struct {
+		MediaID string `json:"media_id"`
+	} `json:"file"`
+	Voice *struct {
+		MediaID string `json:"media_id"`
+	} `json:"voice"`
 }
 
 // RegisterWebhook 挂载 POST /cgi-bin/webhook/send?key=xxx。
@@ -82,6 +88,24 @@ func RegisterWebhook(mux *http.ServeMux, coreSvc *core.Service, st *store.Store)
 			}
 			if _, err := coreSvc.BotMessage(chat.ID, bot.ID, "markdown",
 				map[string]any{"content": req.Markdown.Content}, nil); err != nil {
+				writeErrcode(w, 500, "internal error")
+				return
+			}
+		case "file", "voice":
+			body := req.File
+			if req.MsgType == "voice" {
+				body = req.Voice
+			}
+			if body == nil || body.MediaID == "" {
+				writeErrcode(w, errcodeBadContent, "invalid content, media_id empty")
+				return
+			}
+			if _, err := st.GetMedia(body.MediaID); err != nil {
+				writeErrcode(w, 40007, "invalid media_id") // 40007: 不合法的 media_id
+				return
+			}
+			if _, err := coreSvc.BotMessage(chat.ID, bot.ID, req.MsgType,
+				map[string]any{"media_id": body.MediaID}, nil); err != nil {
 				writeErrcode(w, 500, "internal error")
 				return
 			}

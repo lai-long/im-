@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -188,4 +190,54 @@ func (s *Store) UpdateMessageContent(id int64, content map[string]any) (Message,
 		return m, err
 	}
 	return m, nil
+}
+
+// SaveMedia 登记素材文件并返回 media_id 记录。
+func (s *Store) SaveMedia(mediaID, mediaType, fileName string, ttl int64) (Media, error) {
+	dir := filepath.Join(s.dataDir, "media")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Media{}, err
+	}
+	path := filepath.Join(dir, mediaID+extOf(fileName, mediaType))
+	m := Media{MediaID: mediaID, Type: mediaType, FilePath: path,
+		CreatedAt: now(), ExpireAt: now() + ttl}
+	if _, err := s.db.Exec(`INSERT INTO media(media_id, type, file_path, created_at, expire_at)
+		VALUES(?,?,?,?,?)`, m.MediaID, m.Type, m.FilePath, m.CreatedAt, m.ExpireAt); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+// GetMedia 按 media_id 取素材记录。
+func (s *Store) GetMedia(mediaID string) (Media, error) {
+	var m Media
+	err := s.db.QueryRow(`SELECT id, media_id, type, file_path, created_at, expire_at FROM media WHERE media_id=?`, mediaID).
+		Scan(&m.ID, &m.MediaID, &m.Type, &m.FilePath, &m.CreatedAt, &m.ExpireAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
+// extOf 由文件名或媒体类型推断扩展名。
+func extOf(fileName, mediaType string) string {
+	if ext := filepath.Ext(fileName); ext != "" && len(ext) <= 6 {
+		return ext
+	}
+	switch mediaType {
+	case "voice":
+		return ".amr"
+	default:
+		return ".bin"
+	}
+}
+
+// Media 是一个素材记录（webhook/upload_media 上传的文件）。
+type Media struct {
+	ID        int64  `json:"id"`
+	MediaID   string `json:"media_id"`
+	Type      string `json:"type"`
+	FilePath  string `json:"-"`
+	CreatedAt int64  `json:"created_at"`
+	ExpireAt  int64  `json:"expire_at"`
 }

@@ -30,6 +30,11 @@ func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Stor
 		writeJSON(w, msgs)
 	})
 
+	// 客户端素材下载（页面渲染 file/voice 消息）
+	mux.HandleFunc("GET /api/media/{media_id}", func(w http.ResponseWriter, r *http.Request) {
+		serveMedia(w, st, r.PathValue("media_id"))
+	})
+
 	// 会话列表：群聊 + 与自建应用/机器人的单聊（M2）
 	mux.HandleFunc("GET /api/chats", func(w http.ResponseWriter, r *http.Request) {
 		u, err := st.GetUserByUserid(r.URL.Query().Get("userid"))
