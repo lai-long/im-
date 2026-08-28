@@ -26,6 +26,16 @@ func New(st *store.Store, broadcast func(ev Event)) *Service {
 	return &Service{st: st, Broadcast: broadcast}
 }
 
+// AgentMessage 自建应用（message/send）发一条消息到"用户↔应用"单聊会话。
+func (s *Service) AgentMessage(chatID, agentID int64, msgType string, content map[string]any) (store.Message, error) {
+	m, err := s.st.InsertMessage(chatID, agentID, "agent", msgType, content, nil)
+	if err != nil {
+		return m, err
+	}
+	s.broadcast(m)
+	return m, nil
+}
+
 // Event 是推给客户端的实时事件。
 type Event struct {
 	Kind    string        `json:"kind"` // message

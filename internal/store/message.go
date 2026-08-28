@@ -11,7 +11,7 @@ import (
 type Message struct {
 	ID        int64          `json:"id"`
 	Msgid     string         `json:"msgid"`
-	ChatID    int64          `json:"-"`
+	ChatID    int64          `json:"chat_id"`
 	Sender    string         `json:"sender"` // 展示名
 	SenderID  int64          `json:"-"`
 	SenderTyp string         `json:"sender_type"` // user | bot
@@ -55,11 +55,12 @@ func (s *Store) ListMessages(chatID int64, limit int) ([]Message, error) {
 		limit = 100
 	}
 	rows, err := s.db.Query(`
-		SELECT m.id, m.msgid, m.sender_type, m.sender_id, m.msg_type, m.content_json, m.mentioned, m.created_at,
-		       COALESCE(u.name, b.name, '?')
+		SELECT m.id, m.msgid, m.chat_id, m.sender_type, m.sender_id, m.msg_type, m.content_json, m.mentioned, m.created_at,
+		       COALESCE(u.name, b.name, ag.name, '?')
 		FROM message m
-		LEFT JOIN "user" u ON m.sender_type='user' AND u.id = m.sender_id
-		LEFT JOIN bot     b ON m.sender_type='bot'  AND b.id = m.sender_id
+		LEFT JOIN "user" u ON m.sender_type='user'  AND u.id  = m.sender_id
+		LEFT JOIN bot     b ON m.sender_type='bot'   AND b.id  = m.sender_id
+		LEFT JOIN agent  ag ON m.sender_type='agent' AND ag.id = m.sender_id
 		WHERE m.chat_id = ?
 		ORDER BY m.id DESC LIMIT ?`, chatID, limit)
 	if err != nil {
@@ -70,7 +71,7 @@ func (s *Store) ListMessages(chatID int64, limit int) ([]Message, error) {
 	for rows.Next() {
 		var m Message
 		var cj, mstr string
-		if err := rows.Scan(&m.ID, &m.Msgid, &m.SenderTyp, &m.SenderID, &m.MsgType, &cj, &mstr, &m.CreatedAt, &m.Sender); err != nil {
+		if err := rows.Scan(&m.ID, &m.Msgid, &m.ChatID, &m.SenderTyp, &m.SenderID, &m.MsgType, &cj, &mstr, &m.CreatedAt, &m.Sender); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(cj), &m.Content); err != nil {
@@ -173,10 +174,11 @@ func (s *Store) UpdateMessageContent(id int64, content map[string]any) (Message,
 	var mstr string
 	err = s.db.QueryRow(`
 		SELECT m.id, m.msgid, m.chat_id, m.sender_type, m.sender_id, m.msg_type, m.content_json, m.mentioned, m.created_at,
-		       COALESCE(u.name, b.name, '?')
+		       COALESCE(u.name, b.name, ag.name, '?')
 		FROM message m
-		LEFT JOIN "user" u ON m.sender_type='user' AND u.id = m.sender_id
-		LEFT JOIN bot     b ON m.sender_type='bot'  AND b.id = m.sender_id
+		LEFT JOIN "user" u ON m.sender_type='user'  AND u.id  = m.sender_id
+		LEFT JOIN bot     b ON m.sender_type='bot'   AND b.id  = m.sender_id
+		LEFT JOIN agent  ag ON m.sender_type='agent' AND ag.id = m.sender_id
 		WHERE m.id = ?`, id).
 		Scan(&m.ID, &m.Msgid, &m.ChatID, &m.SenderTyp, &m.SenderID, &m.MsgType, &cj, &mstr, &m.CreatedAt, &m.Sender)
 	if err != nil {

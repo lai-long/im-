@@ -99,6 +99,34 @@ CREATE TABLE media(
 `,
 	// v2：流式回复——记录流式消息 ID，用于全量刷新（M1b）
 	`ALTER TABLE callback_task ADD COLUMN stream_message_id INTEGER NOT NULL DEFAULT 0;`,
+	// v3：自建应用（gettoken / message/send / XML 回调）+ 应用单聊会话（M2）
+	`
+ALTER TABLE chat ADD COLUMN type TEXT NOT NULL DEFAULT 'group';        -- group | direct
+ALTER TABLE chat ADD COLUMN agent_id INTEGER NOT NULL DEFAULT 0;       -- direct 会话对应的自建应用
+
+CREATE TABLE agent(
+  id                INTEGER PRIMARY KEY,
+  corp_id           INTEGER NOT NULL REFERENCES corp(id),
+  agentid           INTEGER UNIQUE NOT NULL,
+  name              TEXT NOT NULL,
+  corpsecret        TEXT UNIQUE NOT NULL,
+  callback_url      TEXT NOT NULL DEFAULT '',
+  callback_token    TEXT NOT NULL DEFAULT '',
+  callback_aes_key  TEXT NOT NULL DEFAULT '',
+  callback_mode     TEXT NOT NULL DEFAULT 'encrypted', -- plain | encrypted
+  callback_verified INTEGER NOT NULL DEFAULT 0,
+  created_at        INTEGER NOT NULL
+);
+
+CREATE TABLE token(
+  id           INTEGER PRIMARY KEY,
+  agent_id     INTEGER NOT NULL REFERENCES agent(id),
+  access_token TEXT UNIQUE NOT NULL,
+  expires_at   INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX idx_token_value ON token(access_token);
+`,
 }
 
 // migrate 依次执行未应用的迁移。

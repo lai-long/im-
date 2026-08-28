@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"log"
 	"time"
 )
@@ -71,5 +73,32 @@ func (s *Store) seedIfEmpty() error {
 		chatID, botID, SeedWebhookKey); err != nil {
 		return err
 	}
+
+	// 示例自建应用（M2：gettoken / message/send / XML 回调）
+	if _, err := tx.Exec(`INSERT INTO agent(corp_id, agentid, name, corpsecret, callback_token, callback_aes_key, created_at)
+		VALUES(?,?,?,?,?,?,?)`, corpID, 1000002, "示例应用",
+		NewSecret(), NewToken(), NewEncodingAESKey(), time.Now().Unix()); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+// SeedAgentInfo 返回示例自建应用的接入信息（启动日志打印，开箱即用）。
+type SeedAgentInfo struct {
+	Corpid    string
+	AgentName string
+	Agentid   int64
+	Secret    string
+}
+
+func (s *Store) SeedAgentInfo() (SeedAgentInfo, error) {
+	var info SeedAgentInfo
+	err := s.db.QueryRow(`
+		SELECT c.corpid, a.name, a.agentid, a.corpsecret
+		FROM agent a JOIN corp c ON c.id = a.corp_id
+		WHERE a.agentid = 1000002`).Scan(&info.Corpid, &info.AgentName, &info.Agentid, &info.Secret)
+	if errors.Is(err, sql.ErrNoRows) {
+		return info, ErrNotFound
+	}
+	return info, err
 }

@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	// 企微兼容层（M1a：webhook/send、aibot/response；后续：自建应用）
 	api.RegisterWebhook(mux, s.Core, s.st)
 	api.RegisterResponse(mux, s.Core, s.st)
+	api.RegisterAgentAPI(mux, s.Core, s.st) // 自建应用（M2）
 
 	// 客户端内部 API 与 WS
 	api.RegisterClientAPI(mux, s.Core, s.st)

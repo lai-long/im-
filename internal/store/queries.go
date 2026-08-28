@@ -36,9 +36,18 @@ type User struct {
 }
 
 type Chat struct {
-	ID     int64  `json:"id"`
-	Chatid string `json:"chatid"`
-	Name   string `json:"name"`
+	ID      int64  `json:"id"`
+	Chatid  string `json:"chatid"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`     // group | direct（direct 为用户与自建应用的单聊）
+	AgentID int64  `json:"agent_id"` // direct 会话对应的自建应用
+}
+
+// scanChatFull 读取含 type/agent_id 的会话行。
+func scanChatFull(row interface{ Scan(...any) error }) (Chat, error) {
+	var c Chat
+	err := row.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
+	return c, err
 }
 
 func scanBot(row interface{ Scan(...any) error }) (Bot, error) {
@@ -176,11 +185,11 @@ func (s *Store) ResetCallbackTask(id int64) error {
 	return err
 }
 
-// GetChat 取群。
+// GetChat 取会话。
 func (s *Store) GetChat(id int64) (Chat, error) {
 	var c Chat
-	err := s.db.QueryRow(`SELECT id, chatid, name FROM chat WHERE id=?`, id).
-		Scan(&c.ID, &c.Chatid, &c.Name)
+	err := s.db.QueryRow(`SELECT id, chatid, name, type, agent_id FROM chat WHERE id=?`, id).
+		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -236,7 +245,7 @@ func now() int64 { return time.Now().Unix() }
 
 // ListChats 列出全部群。
 func (s *Store) ListChats() ([]Chat, error) {
-	rows, err := s.db.Query(`SELECT id, chatid, name FROM chat ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, chatid, name, type, agent_id FROM chat ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +253,7 @@ func (s *Store) ListChats() ([]Chat, error) {
 	var out []Chat
 	for rows.Next() {
 		var c Chat
-		if err := rows.Scan(&c.ID, &c.Chatid, &c.Name); err != nil {
+		if err := rows.Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -266,4 +275,176 @@ func (s *Store) FirstCorp() (Corp, error) {
 func (s *Store) MarkCallbackVerified(botID int64) error {
 	_, err := s.db.Exec(`UPDATE bot SET callback_verified=1 WHERE id=?`, botID)
 	return err
+}
+
+// Agent 对齐企微"自建应用"。
+type Agent struct {
+	ID            int64  `json:"id"`
+	CorpID        int64  `json:"corp_id"`
+	Agentid       int64  `json:"agentid"`
+	Name          string `json:"name"`
+	Corpsecret    string `json:"corpsecret"`
+	CallbackURL   string `json:"callback_url"`
+	CallbackToken string `json:"callback_token"`
+	CallbackAES   string `json:"callback_aes_key"`
+	CallbackMode  string `json:"callback_mode"`
+	CallbackVerif bool   `json:"callback_verified"`
+}
+
+func scanAgent(row interface{ Scan(...any) error }) (Agent, error) {
+	var a Agent
+	var verif int
+	err := row.Scan(&a.ID, &a.CorpID, &a.Agentid, &a.Name, &a.Corpsecret,
+		&a.CallbackURL, &a.CallbackToken, &a.CallbackAES, &a.CallbackMode, &verif)
+	a.CallbackVerif = verif == 1
+	return a, err
+}
+
+const agentCols = `id, corp_id, agentid, name, corpsecret, callback_url, callback_token,
+	callback_aes_key, callback_mode, callback_verified`
+
+// CreateAgent 创建自建应用，agentid 从 1000002 起递增（对齐企微自建应用编号风格）。
+func (s *Store) CreateAgent(corpID int64, name string) (Agent, error) {
+	var maxID sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MAX(agentid) FROM agent`).Scan(&maxID); err != nil {
+		return Agent{}, err
+	}
+	next := int64(1000002)
+	if maxID.Valid {
+		next = maxID.Int64 + 1
+	}
+	res, err := s.db.Exec(`INSERT INTO agent(corp_id, agentid, name, corpsecret, callback_token, callback_aes_key, created_at)
+		VALUES(?,?,?,?,?,?,?)`, corpID, next, name, NewSecret(), NewToken(), NewEncodingAESKey(), now())
+	if err != nil {
+		return Agent{}, err
+	}
+	id, _ := res.LastInsertId()
+	return s.GetAgent(id)
+}
+
+// GetAgent 按内部 id 取自建应用。
+func (s *Store) GetAgent(id int64) (Agent, error) {
+	a, err := scanAgent(s.db.QueryRow(`SELECT `+agentCols+` FROM agent WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
+// GetAgentBySecret 按 corpsecret 取自建应用（gettoken 入口）。
+func (s *Store) GetAgentBySecret(secret string) (Agent, error) {
+	a, err := scanAgent(s.db.QueryRow(`SELECT `+agentCols+` FROM agent WHERE corpsecret=?`, secret))
+	if errors.Is(err, sql.ErrNoRows) {
+		return a, ErrNotFound
+	}
+	return a, err
+}
+
+// ListAgents 列出全部自建应用。
+func (s *Store) ListAgents() ([]Agent, error) {
+	rows, err := s.db.Query(`SELECT ` + agentCols + ` FROM agent ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Agent
+	for rows.Next() {
+		a, err := scanAgent(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// UpdateAgentCallback 保存自建应用回调配置并重置验证状态。
+func (s *Store) UpdateAgentCallback(id int64, url, mode string) error {
+	_, err := s.db.Exec(`UPDATE agent SET callback_url=?, callback_mode=?, callback_verified=0 WHERE id=?`, url, mode, id)
+	return err
+}
+
+// MarkAgentVerified 标记自建应用回调已通过验证。
+func (s *Store) MarkAgentVerified(id int64) error {
+	_, err := s.db.Exec(`UPDATE agent SET callback_verified=1 WHERE id=?`, id)
+	return err
+}
+
+// IssueToken 签发 access_token（7200 秒）。
+func (s *Store) IssueToken(agentID int64) (string, int64, error) {
+	tk := NewRandomString(32)
+	exp := now() + 7200
+	if _, err := s.db.Exec(`INSERT INTO token(agent_id, access_token, expires_at, created_at) VALUES(?,?,?,?)`,
+		agentID, tk, exp, now()); err != nil {
+		return "", 0, err
+	}
+	return tk, exp, nil
+}
+
+// ValidateToken 校验 access_token，返回所属应用 id。
+func (s *Store) ValidateToken(tk string) (int64, error) {
+	var agentID, exp int64
+	if err := s.db.QueryRow(`SELECT agent_id, expires_at FROM token WHERE access_token=?`, tk).
+		Scan(&agentID, &exp); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	if exp <= now() {
+		return 0, errors.New("access_token expired")
+	}
+	return agentID, nil
+}
+
+// ChatsOfUser 列出用户参与的会话：群聊 + 与自建应用的单聊。
+func (s *Store) ChatsOfUser(userID int64) ([]Chat, error) {
+	rows, err := s.db.Query(`
+		SELECT c.id, c.chatid, c.name, c.type, c.agent_id
+		FROM chat_member m JOIN chat c ON c.id = m.chat_id
+		WHERE m.user_id = ? ORDER BY c.id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Chat
+	for rows.Next() {
+		c, err := scanChatFull(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// FindDirectChat 查找用户与自建应用的单聊会话。
+func (s *Store) FindDirectChat(agentID, userID int64) (Chat, error) {
+	var c Chat
+	err := s.db.QueryRow(`
+		SELECT c.id, c.chatid, c.name, c.type, c.agent_id
+		FROM chat_member m JOIN chat c ON c.id = m.chat_id
+		WHERE m.user_id = ? AND c.type = 'direct' AND c.agent_id = ? LIMIT 1`, userID, agentID).
+		Scan(&c.ID, &c.Chatid, &c.Name, &c.Type, &c.AgentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+// CreateDirectChat 创建用户与自建应用的单聊会话（已存在则直接返回）。
+func (s *Store) CreateDirectChat(agentID, userID int64, name string) (Chat, error) {
+	if c, err := s.FindDirectChat(agentID, userID); err == nil {
+		return c, nil
+	}
+	res, err := s.db.Exec(`INSERT INTO chat(chatid, name, type, agent_id, created_at) VALUES(?,?,?,?,?)`,
+		NewChatID(), name, "direct", agentID, now())
+	if err != nil {
+		return Chat{}, err
+	}
+	chatID, _ := res.LastInsertId()
+	if _, err := s.db.Exec(`INSERT OR IGNORE INTO chat_member(chat_id, user_id) VALUES(?,?)`, chatID, userID); err != nil {
+		return Chat{}, err
+	}
+	return s.GetChat(chatID)
 }

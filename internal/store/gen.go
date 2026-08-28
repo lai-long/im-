@@ -58,6 +58,13 @@ func NewMsgID() string {
 	return base64.StdEncoding.EncodeToString(buf[:])
 }
 
+// NewSecret 生成 URL-safe 的 corpsecret（43 位）。
+// 与 EncodingAESKey 不同：secret 会出现在 gettoken 的查询串里，
+// 标准 base64 的 '+' 会被解析成空格，导致鉴权失败。
+func NewSecret() string {
+	return base64.RawURLEncoding.EncodeToString(randomBytes(32))
+}
+
 // NewChatID / NewAibotid 生成对齐企微前缀风格的 ID。
 func NewChatID() string  { return "wr" + NewRandomString(12) }
 func NewAibotid() string { return "wb" + NewRandomString(12) }

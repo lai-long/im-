@@ -11,6 +11,13 @@ import (
 func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Store) {
 	mux.HandleFunc("GET /api/messages", func(w http.ResponseWriter, r *http.Request) {
 		chat, ok := firstChat(st)
+		if v := r.URL.Query().Get("chat_id"); v != "" {
+			if id, err := atoi64(v); err == nil {
+				if c, err := st.GetChat(id); err == nil {
+					chat, ok = c, true
+				}
+			}
+		}
 		if !ok {
 			writeJSON(w, []any{})
 			return
@@ -23,10 +30,26 @@ func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Stor
 		writeJSON(w, msgs)
 	})
 
+	// 会话列表：群聊 + 与自建应用/机器人的单聊（M2）
+	mux.HandleFunc("GET /api/chats", func(w http.ResponseWriter, r *http.Request) {
+		u, err := st.GetUserByUserid(r.URL.Query().Get("userid"))
+		if err != nil {
+			writeJSON(w, []any{})
+			return
+		}
+		chats, err := st.ChatsOfUser(u.ID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, chats)
+	})
+
 	mux.HandleFunc("POST /api/send", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Userid string `json:"userid"`
 			Text   string `json:"text"`
+			ChatID int64  `json:"chat_id"` // 可选：指定会话，缺省用用户首个群
 		}
 		if !decodeJSON(w, r, &req) {
 			return
@@ -37,7 +60,12 @@ func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Stor
 			return
 		}
 		chat, err := st.FirstChatOfUser(u.ID)
-		if err != nil {
+		if req.ChatID != 0 {
+			if c, cerr := st.GetChat(req.ChatID); cerr == nil {
+				chat = c
+			}
+		}
+		if err != nil && req.ChatID == 0 {
 			http.Error(w, "user not in any chat", http.StatusBadRequest)
 			return
 		}

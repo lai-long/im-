@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 // writeErrcode 以企微错误结构应答。
@@ -26,6 +27,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
+// atoi64 解析 int64。
+func atoi64(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
+
 // atoiDefault 解析整数，失败用默认值。
 func atoiDefault(s string, def int) int {
 	if s == "" {
@@ -37,3 +41,6 @@ func atoiDefault(s string, def int) int {
 	}
 	return n
 }
+
+// unixNow 返回当前秒级时间戳。
+func unixNow() int64 { return time.Now().Unix() }
