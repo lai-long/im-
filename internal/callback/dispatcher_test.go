@@ -232,11 +232,11 @@ func TestDispatcherDead(t *testing.T) {
 func TestVerifyCallbackRoundtrip(t *testing.T) {
 	mock := newMockBot(t, 0, nil)
 	d := &Dispatcher{}
-	if err := d.VerifyCallback(mock.srv.URL, tok, aesK); err != nil {
+	if err := d.VerifyCallback(mock.srv.URL, tok, aesK, ""); err != nil {
 		t.Fatalf("VerifyCallback: %v", err)
 	}
 	// 错误 Token 应失败
-	if err := d.VerifyCallback(mock.srv.URL, "wrong-token", aesK); err == nil {
+	if err := d.VerifyCallback(mock.srv.URL, "wrong-token", aesK, ""); err == nil {
 		t.Fatal("错误 Token 应验证失败")
 	}
 }

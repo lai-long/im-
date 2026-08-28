@@ -427,9 +427,9 @@ func (d *Dispatcher) deliver(chatID int64, bot store.Bot, msgType string, conten
 // VerifyCallback 模拟企微"保存回调配置"时的 URL 验证握手：
 // GET url?msg_signature&timestamp&nonce&echostr，接入方须在 1 秒内
 // 返回解密后的明文 echostr（无引号、无 BOM、无换行）。
-func (d *Dispatcher) VerifyCallback(rawURL, token, encodingAESKey string) error {
+func (d *Dispatcher) VerifyCallback(rawURL, token, encodingAESKey, receiveid string) error {
 	echoPlain := "verify-" + store.NewRandomString(12)
-	enc, err := Encrypt(echoPlain, encodingAESKey, "")
+	enc, err := Encrypt(echoPlain, encodingAESKey, receiveid)
 	if err != nil {
 		return err
 	}

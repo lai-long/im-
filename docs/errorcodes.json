@@ -15,5 +15,15 @@
     "invalid_msgtype": 40058,
     "invalid_content": 40008,
     "content_too_big": 45002
+  },
+  "agent": {
+    "ok": 0,
+    "invalid_credential": 40001,
+    "access_token_missing": 41001,
+    "invalid_access_token": 40014,
+    "access_token_expired": 42001,
+    "agentid_missing": 41009,
+    "invalid_agentid": 40056,
+    "empty_user_list": 44004
   }
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -79,7 +80,7 @@ func Run(dataDir string) int {
 	}
 
 	// 1. URL 验证握手
-	add("URL 验证握手", srv.Dispatcher.VerifyCallback(mock.URL, bot.CallbackToken, bot.CallbackAESKey) == nil, "echostr 解密回显")
+	add("URL 验证握手", srv.Dispatcher.VerifyCallback(mock.URL, bot.CallbackToken, bot.CallbackAESKey, "") == nil, "echostr 解密回显")
 
 	// 2. webhook/send 正常与错误码
 	code, msg := postJSON(plat.URL+"/cgi-bin/webhook/send?key="+store.SeedWebhookKey,
@@ -139,7 +140,69 @@ func Run(dataDir string) int {
 		}
 	}
 
-	// 6. TLS 自签证书（M1b）
+	// 6. 自建应用：gettoken → message/send → XML 回调（M2）
+	corp, err := st.FirstCorp()
+	if err != nil {
+		add("自建应用 gettoken", false, err.Error())
+	} else {
+		agent, aerr := st.GetAgent(1)
+		if aerr != nil {
+			add("自建应用 gettoken", false, aerr.Error())
+		} else {
+			// gettoken：真实 HTTP 路由
+			var tr struct {
+				Errcode     int    `json:"errcode"`
+				AccessToken string `json:"access_token"`
+				ExpiresIn   int    `json:"expires_in"`
+			}
+			req, _ := http.NewRequest(http.MethodGet,
+				plat.URL+"/cgi-bin/gettoken?corpid="+corp.CorpID+"&corpsecret="+url.QueryEscape(agent.Corpsecret), nil)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				add("自建应用 gettoken", false, err.Error())
+			} else {
+				_ = json.NewDecoder(resp.Body).Decode(&tr)
+				resp.Body.Close()
+				add("自建应用 gettoken", tr.Errcode == 0 && tr.AccessToken != "", fmt.Sprintf("expires_in=%d", tr.ExpiresIn))
+
+				// message/send → 应用单聊会话
+				body := fmt.Sprintf(`{"touser":"zhangsan","msgtype":"text","agentid":%d,"text":{"content":"selftest 应用消息"}}`, agent.Agentid)
+				code, msg := postJSON(plat.URL+"/cgi-bin/message/send?access_token="+tr.AccessToken, body)
+				add("自建应用 message/send", code == 0, msg)
+
+				// 单聊会话已创建且消息可见
+				u, _ := st.GetUserByUserid("zhangsan")
+				chats, _ := st.ChatsOfUser(u.ID)
+				var direct *store.Chat
+				for i := range chats {
+					if chats[i].Type == "direct" {
+						direct = &chats[i]
+					}
+				}
+				add("自建应用单聊会话", direct != nil, fmt.Sprintf("用户会话数=%d", len(chats)))
+
+				// XML 回调：配置接入方（官方库实现）并完成握手
+				xmlMock := newXMLReceiver(agent.CallbackToken, agent.CallbackAES, corp.CorpID)
+				_ = st.UpdateAgentCallback(agent.ID, xmlMock.URL, "encrypted")
+				if err := srv.Dispatcher.VerifyCallback(xmlMock.URL, agent.CallbackToken, agent.CallbackAES, corp.CorpID); err != nil {
+					add("自建应用回调握手", false, err.Error())
+				} else {
+					add("自建应用回调握手", true, "echostr 解密回显")
+					if direct != nil {
+						if _, _, err := srv.Core.UserMessage(direct.ID, u.ID, "查一下订单"); err != nil {
+							add("自建应用 XML 回调", false, err.Error())
+						} else {
+							ok := waitUntil(func() bool { return xmlMock.received.Load() == 1 }, 5*time.Second)
+							add("自建应用 XML 回调", ok, "官方库解密成功")
+						}
+					}
+				}
+			}
+			_ = resp
+		}
+	}
+
+	// 7. TLS 自签证书（M1b）
 	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
 	if err != nil {
 		add("TLS 自签证书", false, err.Error())
@@ -319,4 +382,48 @@ func countMessages(st *store.Store, chatID int64, msgType string) int {
 		}
 	}
 	return n
+}
+
+// waitUntil 轮询等待条件成立。
+func waitUntil(cond func() bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// xmlReceiver 模拟"自建应用接入方"：用官方库验签解密 XML 回调（receiveid=corpid）。
+type xmlReceiver struct {
+	URL      string
+	crypt    *official.WXBizMsgCrypt
+	received atomic.Int32
+}
+
+func newXMLReceiver(token, aesKey, corpid string) *xmlReceiver {
+	m := &xmlReceiver{crypt: official.NewWXBizMsgCrypt(token, aesKey, corpid, official.XmlType)}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.Method == http.MethodGet {
+			plain, cerr := m.crypt.VerifyURL(q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), q.Get("echostr"))
+			if cerr != nil {
+				http.Error(w, "verify fail", http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write(plain)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if _, cerr := m.crypt.DecryptMsg(q.Get("msg_signature"), q.Get("timestamp"), q.Get("nonce"), body); cerr != nil {
+			http.Error(w, "decrypt fail", http.StatusBadRequest)
+			return
+		}
+		m.received.Store(1)
+		_, _ = w.Write([]byte("success"))
+	}))
+	m.URL = srv.URL
+	return m
 }

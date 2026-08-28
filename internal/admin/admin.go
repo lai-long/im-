@@ -3,6 +3,7 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"im-/internal/callback"
@@ -141,7 +142,7 @@ func (s *Service) verifyBot(botID int64) error {
 	if bot.CallbackURL == "" {
 		return errNoCallbackURL
 	}
-	if err := s.disp.VerifyCallback(bot.CallbackURL, bot.CallbackToken, bot.CallbackAESKey); err != nil {
+	if err := s.disp.VerifyCallback(bot.CallbackURL, bot.CallbackToken, bot.CallbackAESKey, ""); err != nil {
 		return err
 	}
 	return s.st.MarkCallbackVerified(botID)
@@ -218,4 +219,92 @@ func (s *Service) replayTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, map[string]any{"id": req.ID, "status": "pending"})
+}
+
+// agents 列出自建应用（含 corpid 与 gettoken 提示）。
+func (s *Service) agents(w http.ResponseWriter, r *http.Request) {
+	list, err := s.st.ListAgents()
+	if err != nil {
+		s.err(w, err.Error(), 500)
+		return
+	}
+	corp, err := s.st.FirstCorp()
+	if err != nil {
+		s.err(w, err.Error(), 500)
+		return
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, a := range list {
+		out = append(out, map[string]any{
+			"agent":       a,
+			"corpid":      corp.CorpID,
+			"gettoken":    fmt.Sprintf("%s/cgi-bin/gettoken?corpid=%s&corpsecret=%s", s.cfg.ExternalBaseURL(), corp.CorpID, a.Corpsecret),
+			"secret_hint": a.Corpsecret[:8] + "…",
+		})
+	}
+	s.writeJSON(w, out)
+}
+
+func (s *Service) createAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		s.err(w, "name required", http.StatusBadRequest)
+		return
+	}
+	corp, err := s.st.FirstCorp()
+	if err != nil {
+		s.err(w, err.Error(), 500)
+		return
+	}
+	a, err := s.st.CreateAgent(corp.ID, req.Name)
+	if err != nil {
+		s.err(w, err.Error(), 500)
+		return
+	}
+	s.writeJSON(w, a)
+}
+
+// saveAgentCallback 保存自建应用回调配置并立即做一次 URL 验证握手。
+func (s *Service) saveAgentCallback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AgentID int64  `json:"agent_id"`
+		URL     string `json:"url"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AgentID == 0 || req.URL == "" {
+		s.err(w, "agent_id and url required", http.StatusBadRequest)
+		return
+	}
+	if req.Mode == "" {
+		req.Mode = "encrypted"
+	}
+	if req.Mode != "encrypted" && req.Mode != "plain" {
+		s.err(w, "mode must be encrypted or plain", http.StatusBadRequest)
+		return
+	}
+	agent, err := s.st.GetAgent(req.AgentID)
+	if err != nil {
+		s.err(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	if err := s.st.UpdateAgentCallback(agent.ID, req.URL, req.Mode); err != nil {
+		s.err(w, err.Error(), 500)
+		return
+	}
+	out := map[string]any{"agent_id": agent.ID, "url": req.URL, "mode": req.Mode}
+	corp, cerr := s.st.FirstCorp()
+	if cerr != nil {
+		s.err(w, cerr.Error(), 500)
+		return
+	}
+	if err := s.disp.VerifyCallback(req.URL, agent.CallbackToken, agent.CallbackAES, corp.CorpID); err != nil {
+		out["verified"] = false
+		out["error"] = err.Error()
+	} else {
+		out["verified"] = true
+		_ = s.st.MarkAgentVerified(agent.ID)
+	}
+	s.writeJSON(w, out)
 }

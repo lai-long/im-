@@ -59,11 +59,16 @@ curl -X POST 'http://127.0.0.1:7788/cgi-bin/webhook/send?key=<webhook_key>' \
 make selftest
 ```
 
-   覆盖：URL 验证握手、webhook/send（含错误码）、@机器人回调、流式多轮刷新、
-   response_url（一次性语义）、template_card、TLS 自签证书。
+   18 项覆盖：URL 验证握手、webhook/send（含错误码）、@机器人回调、流式多轮刷新、
+   response_url（一次性语义）、template_card、自建应用全链路（gettoken→message/send→XML 回调）、
+   TLS 自签证书。
 
 5. **流式回复**：接入方被动回复 `finish=false` 的 stream 消息，平台按 1s 节奏轮询刷新，
    客户端同一条气泡实时更新，直至 `finish=true` 或 6 分钟窗口结束。
+
+6. **自建应用**：启动日志里的 gettoken 地址换 token，再 `message/send` 给指定 userid；
+   消息落在"用户↔应用"单聊会话（客户端左侧会话列表可切换），用户在该会话发言会触发
+   XML 加密回调（receiveid=corpid）。
 
 ## 当前阶段
 
@@ -72,8 +77,9 @@ make selftest
   消息流水、回调重放）、回环自测、Go/Python 接入方示例。
 - **M1b 已完成**：流式回复轮询（1s 节奏、全量刷新覆盖同一条消息、6 分钟窗口）、
   template_card（被动回复与 response_url）、TLS 自签证书（`-tls`）。
-- **M2 起**：自建应用兼容（gettoken / message/send / XML 回调）、素材（webhook/upload_media）、
-  机器人单聊、明文回调模式。
+- **M2 进行中**：已完成——自建应用兼容（gettoken / message/send / XML 加密回调、应用单聊会话、
+  控制台管理）、明文回调模式、客户端多会话。待做——`webhook/upload_media` 素材（file/voice）、
+  机器人单聊（chattype=single）。
 - **M3**：智能机器人长连接模式同形模拟、卡片交互事件、OAuth2、hosts 劫持脚本。
 
 ## 目录结构

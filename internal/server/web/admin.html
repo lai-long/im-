@@ -45,6 +45,15 @@
   </section>
 
   <section>
+    <h2>自建应用（gettoken / message/send）</h2>
+    <div id="agents"></div>
+    <div class="row">
+      <input id="newAgentName" type="text" placeholder="新自建应用名称">
+      <button onclick="createAgent()">创建自建应用</button>
+    </div>
+  </section>
+
+  <section>
     <h2>回调任务（推送状态 / 重放）</h2>
     <div class="row">
       <select id="taskStatus">
@@ -96,6 +105,48 @@ async function loadBots() {
       </td></tr>
     </table><hr>`).join('');
   window._chats = chats;
+}
+
+async function loadAgents() {
+  const agents = await jget('/admin/agents');
+  $('#agents').innerHTML = agents.map(x => {
+    const a = x.agent;
+    return `
+    <table>
+      <tr><th style="width:120px">名称</th><td>${a.name}${a.callback_verified
+        ? ' <span class="badge ok">回调已验证</span>' : ' <span class="badge bad">回调未验证</span>'}</td></tr>
+      <tr><th>agentid</th><td><code>${a.agentid}</code></td></tr>
+      <tr><th>corpid</th><td><code>${x.corpid}</code></td></tr>
+      <tr><th>corpsecret</th><td><code>${a.corpsecret}</code></td></tr>
+      <tr><th>gettoken</th><td><code>${x.gettoken}</code></td></tr>
+      <tr><th>回调三元组</th><td>Token <code>${a.callback_token}</code> / AESKey <code>${a.callback_aes_key}</code></td></tr>
+      <tr><th>操作</th><td><div class="row">
+        <input type="text" id="aurl-${a.id}" placeholder="回调 URL（自建应用 XML 回调）" value="${a.callback_url}">
+        <select id="amode-${a.id}">
+          <option value="encrypted"${a.callback_mode==='encrypted'?' selected':''}>encrypted</option>
+          <option value="plain"${a.callback_mode==='plain'?' selected':''}>plain</option>
+        </select>
+        <button onclick="saveAgentCallback(${a.id})">保存并验证</button>
+        <pre id="ares-${a.id}" class="muted"></pre>
+      </div></td></tr>
+    </table><hr>`;
+  }).join('');
+}
+
+async function createAgent() {
+  const name = $('#newAgentName').value.trim();
+  if (!name) return;
+  await jpost('/admin/agents', { name });
+  $('#newAgentName').value = '';
+  loadAgents();
+}
+
+async function saveAgentCallback(id) {
+  const url = $('#aurl-' + id).value.trim();
+  const mode = $('#amode-' + id).value;
+  const r = await jpost('/admin/agents/callback', { agent_id: id, url, mode });
+  $('#ares-' + id).textContent = r.verified ? '验证通过' : '验证失败: ' + (r.error || '');
+  loadAgents();
 }
 
 async function createBot() {
@@ -150,7 +201,7 @@ async function loadMessages() {
     </tr>`).join('')}</table>` : '<div class="muted">无</div>';
 }
 
-loadBots(); loadTasks(); loadMessages();
+loadBots(); loadAgents(); loadTasks(); loadMessages();
 setInterval(() => { loadTasks(); loadMessages(); }, 4000);
 </script>
 </body>
