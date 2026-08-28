@@ -154,3 +154,55 @@ func TestResponseURL(t *testing.T) {
 		t.Fatalf("引用内容不符: %v", quote)
 	}
 }
+
+// TestResponseURLTemplateCard 覆盖 response_url 的 template_card 回复。
+func TestResponseURLTemplateCard(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	csvc := core.New(st, nil)
+	mux := http.NewServeMux()
+	RegisterResponse(mux, csvc, st)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	chat, bot, _ := st.GetChatByWebhookKey(store.SeedWebhookKey)
+	u, _ := st.GetUserByUserid("zhangsan")
+	msg, _, _ := csvc.UserMessage(chat.ID, u.ID, "@示例机器人 构建结果")
+	task, _ := st.CreateCallbackTask(msg.ID, bot.ID, "{}", "code-card", time.Now().Add(time.Hour).Unix())
+
+	post := func(body string) map[string]any {
+		req, _ := http.NewRequest(http.MethodPost,
+			srv.URL+"/cgi-bin/aibot/response?response_code="+task.ResponseCode, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
+	}
+
+	if out := post(`{"msgtype":"template_card","template_card":{"card_type":"text_notice","main_title":{"title":"构建成功"}}}`); out["errcode"] != 0.0 {
+		t.Fatalf("template_card 回复应成功: %v", out)
+	}
+	if out := post(`{"msgtype":"template_card","template_card":{}}`); out["errcode"] != 40001.0 {
+		t.Fatalf("复用 code 应返回 40001: %v", out)
+	}
+
+	msgs, _ := st.ListMessages(chat.ID, 50)
+	for _, m := range msgs {
+		if m.MsgType == "template_card" {
+			if m.Content["card_type"] != "text_notice" {
+				t.Fatalf("卡片内容不符: %v", m.Content)
+			}
+			if _, ok := m.Content["quote"]; !ok {
+				t.Fatalf("卡片应带引用: %v", m.Content)
+			}
+			return
+		}
+	}
+	t.Fatal("template_card 未落群")
+}

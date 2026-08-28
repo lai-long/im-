@@ -40,6 +40,7 @@ func RegisterResponse(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 			return
 		}
 
+		contentAny := map[string]any{}
 		switch req.MsgType {
 		case "markdown":
 			if req.Markdown == nil || req.Markdown.Content == "" {
@@ -50,10 +51,16 @@ func RegisterResponse(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 				writeErrcode(w, errcodeContentTooBig, "content size out of range")
 				return
 			}
+			contentAny["content"] = req.Markdown.Content
 		case "template_card":
-			// M1b 支持
-			writeErrcode(w, errcodeBadMsgType, "template_card 将在 M1b 支持")
-			return
+			if len(req.TemplateCard) == 0 {
+				writeErrcode(w, errcodeBadContent, "invalid content, template_card empty")
+				return
+			}
+			// 卡片原文整体落库，附带引用信息
+			for k, v := range req.TemplateCard {
+				contentAny[k] = v
+			}
 		default:
 			writeErrcode(w, errcodeBadMsgType, "invalid msgtype")
 			return
@@ -71,15 +78,12 @@ func RegisterResponse(mux *http.ServeMux, coreSvc *core.Service, st *store.Store
 			writeErrcode(w, 500, "internal error")
 			return
 		}
-		content := map[string]any{
-			"content": req.Markdown.Content,
-			"quote": map[string]any{
-				"msgid":   msg.Msgid,
-				"sender":  senderName(st, msg),
-				"content": msg.Content["content"],
-			},
+		contentAny["quote"] = map[string]any{
+			"msgid":   msg.Msgid,
+			"sender":  senderName(st, msg),
+			"content": msg.Content["content"],
 		}
-		if _, err := coreSvc.BotMessage(msg.ChatID, task.BotID, req.MsgType, content, nil); err != nil {
+		if _, err := coreSvc.BotMessage(msg.ChatID, task.BotID, req.MsgType, contentAny, nil); err != nil {
 			writeErrcode(w, 500, "internal error")
 			return
 		}
