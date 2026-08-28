@@ -102,6 +102,11 @@ func (s *Service) UserMessage(chatID, userID int64, text string) (store.Message,
 	return m, hit, nil
 }
 
+// BroadcastStream 向客户端推送流式消息的全量刷新（同一 msgid 覆盖更新）。
+func (s *Service) BroadcastStream(m store.Message) {
+	s.Broadcast(Event{Kind: "stream", Message: m})
+}
+
 func (s *Service) broadcast(m store.Message) {
 	raw, _ := json.Marshal(m.Content)
 	_ = raw

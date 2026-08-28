@@ -15,10 +15,12 @@ type CallbackTask struct {
 	Payload      string `json:"payload"` // 加密前明文 JSON
 	ResponseCode string `json:"response_code"`
 	StreamID     string `json:"stream_id"`
+	StreamMsgID  int64  `json:"stream_message_id"` // 流式消息（全量刷新目标）
 	StreamFin    bool   `json:"stream_finished"`
-	Status       string `json:"status"`
+	Status       string `json:"status"` // pending|processing|streaming|done|dead
 	Attempt      int    `json:"attempt"`
 	NextRetry    int64  `json:"next_retry_at"`
+	CreatedAt    int64  `json:"created_at"`
 	LastError    string `json:"last_error"`
 }
 
@@ -42,15 +44,16 @@ func (s *Store) CreateCallbackTask(messageID, botID int64, payload, responseCode
 }
 
 // NextPendingTask 取一条到期的待推送任务（全局串行，按 id 保序）。
+// streaming 状态的任务即流式刷新一轮，同样进入该队列。
 func (s *Store) NextPendingTask() (CallbackTask, error) {
 	var t CallbackTask
 	var fin int
 	err := s.db.QueryRow(`SELECT id, message_id, bot_id, payload, response_code,
-		stream_id, stream_finished, status, attempt, next_retry_at, last_error
-		FROM callback_task WHERE status='pending' AND next_retry_at <= ?
+		stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at, last_error
+		FROM callback_task WHERE status IN ('pending','streaming') AND next_retry_at <= ?
 		ORDER BY id LIMIT 1`, now()).
 		Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.LastError)
+			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
 	t.StreamFin = fin == 1
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound
@@ -61,6 +64,21 @@ func (s *Store) NextPendingTask() (CallbackTask, error) {
 // MarkTaskProcessing 置为处理中。
 func (s *Store) MarkTaskProcessing(id int64) error {
 	_, err := s.db.Exec(`UPDATE callback_task SET status='processing', attempt=attempt+1, updated_at=? WHERE id=?`, now(), id)
+	return err
+}
+
+// StartStream 进入流式状态：记录 stream id、流式消息 id 与下一轮刷新时间。
+func (s *Store) StartStream(id int64, streamID string, streamMsgID, nextAt int64) error {
+	_, err := s.db.Exec(`UPDATE callback_task SET status='streaming', stream_id=?, stream_message_id=?,
+		stream_finished=0, attempt=0, next_retry_at=?, updated_at=? WHERE id=?`,
+		streamID, streamMsgID, nextAt, now(), id)
+	return err
+}
+
+// ContinueStream 安排下一轮流式刷新。
+func (s *Store) ContinueStream(id int64, nextAt int64) error {
+	_, err := s.db.Exec(`UPDATE callback_task SET status='streaming', attempt=0, next_retry_at=?, updated_at=? WHERE id=?`,
+		nextAt, now(), id)
 	return err
 }
 
@@ -113,8 +131,8 @@ func (s *Store) ListCallbackTasks(status string, limit int) ([]CallbackTask, err
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	q := `SELECT id, message_id, bot_id, payload, response_code, stream_id, stream_finished,
-		status, attempt, next_retry_at, last_error FROM callback_task`
+	q := `SELECT id, message_id, bot_id, payload, response_code, stream_id, stream_message_id,
+		stream_finished, status, attempt, next_retry_at, created_at, last_error FROM callback_task`
 	var args []any
 	if status != "" {
 		q += ` WHERE status=?`
@@ -132,7 +150,7 @@ func (s *Store) ListCallbackTasks(status string, limit int) ([]CallbackTask, err
 		var t CallbackTask
 		var fin int
 		if err := rows.Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.LastError); err != nil {
+			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError); err != nil {
 			return nil, err
 		}
 		t.StreamFin = fin == 1
@@ -146,11 +164,10 @@ func (s *Store) ValidResponseTask(code string) (CallbackTask, error) {
 	var t CallbackTask
 	var fin int
 	err := s.db.QueryRow(`SELECT id, message_id, bot_id, payload, response_code,
-		stream_id, stream_finished, status, attempt, next_retry_at, last_error, response_used, response_expire_at
-		FROM callback_task WHERE response_code=?`, code).
+		stream_id, stream_message_id, stream_finished, status, attempt, next_retry_at, created_at,
+		last_error FROM callback_task WHERE response_code=?`, code).
 		Scan(&t.ID, &t.MessageID, &t.BotID, &t.Payload, &t.ResponseCode,
-			&t.StreamID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.LastError,
-			new(int), new(int64))
+			&t.StreamID, &t.StreamMsgID, &fin, &t.Status, &t.Attempt, &t.NextRetry, &t.CreatedAt, &t.LastError)
 	t.StreamFin = fin == 1
 	if errors.Is(err, sql.ErrNoRows) {
 		return t, ErrNotFound

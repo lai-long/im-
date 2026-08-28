@@ -15,6 +15,7 @@
   .msg .meta .bot-tag { background: #3a6ea5; color: #fff; border-radius: 3px; padding: 0 4px; font-size: 11px; margin-right: 4px; }
   .msg .content { white-space: pre-wrap; word-break: break-word; }
   .msg .at { color: #c0392b; font-weight: 600; }
+  .msg .typing { color: #2e9e5b; font-size: 12px; }
   footer { display: flex; gap: 8px; padding: 10px 16px; background: #fff; border-top: 1px solid #e0e0e0; }
   #input { flex: 1; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
   button { padding: 8px 18px; border: 0; border-radius: 6px; background: #3a6ea5; color: #fff; cursor: pointer; }
@@ -72,15 +73,24 @@ async function boot() {
 function render(m) {
   const div = document.createElement('div');
   div.className = 'msg';
+  div.dataset.msgid = m.msgid;
   let text = m.content.content || '';
   // 高亮 @提及
   text = text.replace(/(@[^\s，,。@]+)/g, '<span class="at">$1</span>');
   const tag = m.sender_type === 'bot' ? '<span class="bot-tag">bot</span>' : '';
   const time = new Date(m.ts / 1000).toLocaleTimeString();
-  div.innerHTML = `<div class="meta">${tag}${m.sender} · ${time}</div><div class="content">${escapeHtml(text)}</div>`;
+  const typing = (m.msgtype === 'stream' && m.content && m.content.finish === false) ? ' <span class="typing">生成中…</span>' : '';
+  div.innerHTML = `<div class="meta">${tag}${m.sender} · ${time}${typing}</div><div class="content">${escapeHtml(text)}</div>`;
   // escapeHtml 后再上色会失效，简单处理：先转义再替换
   $('#msgs').appendChild(div);
   $('#msgs').scrollTop = $('#msgs').scrollHeight;
+}
+
+// renderStream 流式全量刷新：按 msgid 覆盖已有气泡，未渲染过则追加
+function renderStream(m) {
+  const exist = document.querySelector(`.msg[data-msgid="${CSS.escape(m.msgid)}"]`);
+  if (exist) { exist.remove(); render(m); return; }
+  render(m);
 }
 
 function escapeHtml(s) {
@@ -94,6 +104,7 @@ function connect() {
   ws.onmessage = e => {
     const ev = JSON.parse(e.data);
     if (ev.kind === 'message') render(ev.message);
+    if (ev.kind === 'stream') renderStream(ev.message);
   };
   ws.onclose = () => { setTimeout(connect, Math.min(1000 * ++retry, 5000)); };
 }

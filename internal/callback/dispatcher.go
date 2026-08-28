@@ -21,28 +21,38 @@ var defaultBackoff = []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.
 
 const pushTimeout = 5 * time.Second
 
+// 流式回复：官方未公开轮询节奏，平台取固定值（可配置）；最长窗口 6 分钟（设计文档 §4.3）。
+const (
+	defaultStreamTick   = 1 * time.Second
+	defaultStreamWindow = 6 * time.Minute
+)
+
 // Dispatcher 把用户 @机器人 的消息按智能机器人格式推给接入方，
-// 并消费接入方的被动回复落群。
+// 并消费接入方的被动回复落群（含流式全量刷新）。
 type Dispatcher struct {
-	st      *store.Store
-	base    string // 平台对外 Base URL（response_url 用）
-	core    *core.Service
-	cli     *http.Client
-	wake    chan struct{}
-	stop    chan struct{}
-	Backoff []time.Duration // 重试间隔（默认对齐企微 2s/4s/8s；测试可注入）
+	st           *store.Store
+	base         string // 平台对外 Base URL（response_url 用）
+	core         *core.Service
+	cli          *http.Client
+	wake         chan struct{}
+	stop         chan struct{}
+	Backoff      []time.Duration // 重试间隔（默认对齐企微 2s/4s/8s；测试可注入）
+	StreamTick   time.Duration   // 流式刷新轮询节奏（默认 1s）
+	StreamWindow time.Duration   // 流式最长窗口（默认 6 分钟，对齐企微）
 }
 
 // NewDispatcher 创建分发器。
 func NewDispatcher(st *store.Store, baseURL string, coreSvc *core.Service) *Dispatcher {
 	return &Dispatcher{
-		st:      st,
-		base:    strings.TrimRight(baseURL, "/"),
-		core:    coreSvc,
-		cli:     &http.Client{Timeout: pushTimeout},
-		wake:    make(chan struct{}, 1),
-		stop:    make(chan struct{}),
-		Backoff: defaultBackoff,
+		st:           st,
+		base:         strings.TrimRight(baseURL, "/"),
+		core:         coreSvc,
+		cli:          &http.Client{Timeout: pushTimeout},
+		wake:         make(chan struct{}, 1),
+		stop:         make(chan struct{}),
+		Backoff:      defaultBackoff,
+		StreamTick:   defaultStreamTick,
+		StreamWindow: defaultStreamWindow,
 	}
 }
 
@@ -142,25 +152,150 @@ func (d *Dispatcher) process(task store.CallbackTask) {
 		return
 	}
 
-	attempt := task.Attempt + 1
-	lastErr, reply := d.push(bot, msg, task.Payload)
-	if lastErr == "" {
-		_ = d.st.FinishTask(task.ID, noteForReply(reply))
+	if task.Status == "streaming" {
+		d.processStream(task, bot, msg)
 		return
+	}
+
+	attempt := task.Attempt + 1
+	lastErr, reply := d.push(bot, task.Payload)
+	if lastErr == "" {
+		// 无回复（success/空）→ 完成；有回复 → 按类型落群，流式则进入轮询
+		note := ""
+		switch {
+		case reply == nil:
+			// 无回复
+		case reply.MsgType == "stream":
+			if reply.Stream == nil || reply.Stream.Content == "" {
+				lastErr = "stream 回复缺少内容"
+				break
+			}
+			streamID := reply.Stream.ID
+			if streamID == "" {
+				streamID = store.NewRandomString(8)
+			}
+			m := d.deliver(msg.ChatID, bot, "stream", map[string]any{
+				"content": reply.Stream.Content, "finish": reply.Stream.Finish})
+			if reply.Stream.Finish {
+				note = "流式回复完成（一次性）"
+			} else {
+				_ = d.st.StartStream(task.ID, streamID, m.ID, time.Now().Add(d.StreamTick).Unix())
+				d.wakeLoop()
+				return
+			}
+		case reply.MsgType == "template_card":
+			if len(reply.TemplateCard) == 0 {
+				lastErr = "template_card 回复缺少内容"
+				break
+			}
+			d.deliver(msg.ChatID, bot, "template_card", reply.TemplateCard)
+			note = "template_card 已落群"
+		case reply.MsgType == "text":
+			// 官方语义：text 仅"进入会话欢迎语"场景支持（M2）
+			lastErr = "text 被动回复仅欢迎语场景支持（M2），已拒绝"
+		default:
+			lastErr = "不支持的被动回复类型: " + reply.MsgType
+		}
+		if lastErr == "" {
+			_ = d.st.FinishTask(task.ID, note)
+			return
+		}
 	}
 	if attempt <= len(d.Backoff) {
 		_ = d.st.RetryTask(task.ID, attempt, time.Now().Add(d.Backoff[attempt-1]).Unix(), lastErr, false)
 	} else {
 		_ = d.st.RetryTask(task.ID, attempt, 0, lastErr, true)
 	}
+	d.wakeLoop()
+}
+
+// processStream 处理一轮流式刷新：推送 stream.id 回调，接入方回全量内容，
+// 平台更新同一条消息；finish=true 或超过 6 分钟窗口则结束。
+func (d *Dispatcher) processStream(task store.CallbackTask, bot store.Bot, msg store.Message) {
+	// 窗口结束：自用户消息起 6 分钟
+	if task.CreatedAt > 0 && time.Since(time.Unix(task.CreatedAt, 0)) > d.StreamWindow {
+		_ = d.st.FinishTask(task.ID, "流式窗口结束（6 分钟）")
+		return
+	}
+	chat, err := d.st.GetChat(msg.ChatID)
+	if err != nil {
+		_ = d.st.FinishTask(task.ID, "chat missing")
+		return
+	}
+	user, err := d.st.GetUserByID(msg.SenderID)
+	if err != nil {
+		_ = d.st.FinishTask(task.ID, "user missing")
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"msgid":    msg.Msgid,
+		"aibotid":  bot.Aibotid,
+		"chatid":   chat.Chatid,
+		"chattype": "group",
+		"from":     map[string]any{"userid": user.Userid},
+		"msgtype":  "stream",
+		"stream":   map[string]any{"id": task.StreamID},
+	})
+	if err != nil {
+		_ = d.st.FinishTask(task.ID, "流式载荷构造失败")
+		return
+	}
+
+	attempt := task.Attempt + 1
+	lastErr, reply := d.push(bot, string(payload))
+	if lastErr != "" {
+		if attempt <= len(d.Backoff) {
+			_ = d.st.RetryTask(task.ID, attempt, time.Now().Add(d.Backoff[attempt-1]).Unix(), lastErr, false)
+		} else {
+			_ = d.st.RetryTask(task.ID, attempt, 0, lastErr, true)
+		}
+		d.wakeLoop()
+		return
+	}
+	// 流式刷新应答必须是 stream
+	if reply == nil || reply.MsgType != "stream" || reply.Stream == nil {
+		_ = d.st.FinishTask(task.ID, "流式刷新应答非 stream，已结束")
+		return
+	}
+	stream := reply.Stream
+	if task.StreamMsgID != 0 {
+		updated, err := d.st.UpdateMessageContent(task.StreamMsgID, map[string]any{
+			"content": stream.Content,
+			"finish":  stream.Finish,
+		})
+		if err == nil && d.core != nil {
+			d.core.BroadcastStream(updated)
+		}
+	}
+	if stream.Finish {
+		_ = d.st.FinishTask(task.ID, "流式回复完成")
+		return
+	}
+	_ = d.st.ContinueStream(task.ID, time.Now().Add(d.StreamTick).Unix())
+	d.wakeLoop()
+}
+
+// wakeLoop 唤醒消费循环（不阻塞）。
+func (d *Dispatcher) wakeLoop() {
 	select {
 	case d.wake <- struct{}{}:
 	default:
 	}
 }
 
-// push 执行一次加密推送，返回错误描述与被动回复（成功且存在时）。
-func (d *Dispatcher) push(bot store.Bot, msg store.Message, payload string) (string, json.RawMessage) {
+// replyPayload 是解析后的被动回复。
+type replyPayload struct {
+	MsgType string `json:"msgtype"`
+	Stream  *struct {
+		ID      string `json:"id"`
+		Finish  bool   `json:"finish"`
+		Content string `json:"content"`
+	} `json:"stream"`
+	TemplateCard map[string]any `json:"template_card"`
+}
+
+// push 执行一次加密推送，返回错误描述与解析后的被动回复（无回复时为 nil）。
+func (d *Dispatcher) push(bot store.Bot, payload string) (string, *replyPayload) {
 	var body []byte
 	postURL := bot.CallbackURL
 	ts := fmt.Sprintf("%d", time.Now().Unix())
@@ -198,16 +333,11 @@ func (d *Dispatcher) push(bot store.Bot, msg store.Message, payload string) (str
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Sprintf("接入方应答 %d: %s", resp.StatusCode, truncate(string(respBody), 200)), nil
 	}
-	replyErr, reply := d.consumeReply(bot, msg, respBody)
-	if replyErr != "" {
-		return replyErr, nil
-	}
-	return "", reply
+	return d.parseReply(bot, respBody)
 }
 
-// consumeReply 解析被动回复：空/success 表示无回复；{"encrypt":...} 解密落群。
-// 返回 (错误描述, 回复原文)。
-func (d *Dispatcher) consumeReply(bot store.Bot, msg store.Message, body []byte) (string, json.RawMessage) {
+// parseReply 解析被动回复：空/success 表示无回复；{"encrypt":...} 解密后解析。
+func (d *Dispatcher) parseReply(bot store.Bot, body []byte) (string, *replyPayload) {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" || trimmed == "success" {
 		return "", nil
@@ -226,60 +356,20 @@ func (d *Dispatcher) consumeReply(bot store.Bot, msg store.Message, body []byte)
 		}
 		plain = dec
 	}
-	var reply struct {
-		MsgType string `json:"msgtype"`
-		Stream  *struct {
-			ID      string `json:"id"`
-			Finish  bool   `json:"finish"`
-			Content string `json:"content"`
-		} `json:"stream"`
-		TemplateCard map[string]any `json:"template_card"`
-	}
+	var reply replyPayload
 	if err := json.Unmarshal([]byte(plain), &reply); err != nil {
 		return "被动回复 JSON 解析失败: " + err.Error(), nil
 	}
-	switch reply.MsgType {
-	case "stream":
-		if reply.Stream == nil || reply.Stream.Content == "" {
-			return "stream 回复缺少内容", nil
-		}
-		if !reply.Stream.Finish {
-			// M1b 将实现流式轮询；当前按首轮内容落群并备注
-			d.deliverReply(msg.ChatID, bot, "stream", map[string]any{"content": reply.Stream.Content, "finish": false})
-			return "", nil
-		}
-		d.deliverReply(msg.ChatID, bot, "stream", map[string]any{"content": reply.Stream.Content, "finish": true})
-		return "", nil
-	case "text":
-		// 官方语义：text 仅"进入会话欢迎语"场景支持（M2）；此处拒绝
-		return "text 被动回复仅欢迎语场景支持（M2），已拒绝", nil
-	case "template_card":
-		return "template_card 被动回复将在 M1b 支持", nil
-	default:
-		return "不支持的被动回复类型: " + reply.MsgType, nil
-	}
+	return "", &reply
 }
 
-// deliverReply 把被动回复以机器人身份落入指定群。
-func (d *Dispatcher) deliverReply(chatID int64, bot store.Bot, msgType string, content map[string]any) {
+// deliver 把回复以机器人身份落入指定群，返回落库消息。
+func (d *Dispatcher) deliver(chatID int64, bot store.Bot, msgType string, content map[string]any) store.Message {
 	if d.core == nil || chatID == 0 {
-		return
+		return store.Message{}
 	}
-	_, _ = d.core.BotMessage(chatID, bot.ID, msgType, content, nil)
-}
-
-func noteForReply(reply json.RawMessage) string {
-	if reply == nil {
-		return ""
-	}
-	return "被动回复已落群"
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	m, _ := d.core.BotMessage(chatID, bot.ID, msgType, content, nil)
+	return m
 }
 
 // VerifyCallback 模拟企微"保存回调配置"时的 URL 验证握手：
@@ -319,3 +409,11 @@ func (d *Dispatcher) VerifyCallback(rawURL, token, encodingAESKey string) error 
 
 // Stop 停止消费循环。
 func (d *Dispatcher) Stop() { close(d.stop) }
+
+// truncate 截断长文本（错误信息展示用）。
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}

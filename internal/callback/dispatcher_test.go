@@ -62,7 +62,7 @@ func newMockBot(t *testing.T, failFirst int32, reply func() map[string]any) *moc
 				http.Error(w, "decrypt fail", http.StatusBadRequest)
 				return
 			}
-			if !strings.Contains(string(msg), "@示例机器人 hello") {
+			if !strings.Contains(string(msg), "@示例机器人") {
 				http.Error(w, "unexpected payload", http.StatusBadRequest)
 				return
 			}

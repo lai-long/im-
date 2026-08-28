@@ -159,3 +159,31 @@ func (s *Store) FirstChatOfUser(userID int64) (Chat, error) {
 
 // TouchMedia 预留素材表写入口（M2 使用，避免迁移时遗漏）。
 var _ = time.Now
+
+// UpdateMessageContent 全量覆盖消息内容（流式回复刷新语义：接入方每次回全量内容）。
+func (s *Store) UpdateMessageContent(id int64, content map[string]any) (Message, error) {
+	cj, err := json.Marshal(content)
+	if err != nil {
+		return Message{}, err
+	}
+	if _, err := s.db.Exec(`UPDATE message SET content_json=? WHERE id=?`, string(cj), id); err != nil {
+		return Message{}, err
+	}
+	var m Message
+	var mstr string
+	err = s.db.QueryRow(`
+		SELECT m.id, m.msgid, m.chat_id, m.sender_type, m.sender_id, m.msg_type, m.content_json, m.mentioned, m.created_at,
+		       COALESCE(u.name, b.name, '?')
+		FROM message m
+		LEFT JOIN "user" u ON m.sender_type='user' AND u.id = m.sender_id
+		LEFT JOIN bot     b ON m.sender_type='bot'  AND b.id = m.sender_id
+		WHERE m.id = ?`, id).
+		Scan(&m.ID, &m.Msgid, &m.ChatID, &m.SenderTyp, &m.SenderID, &m.MsgType, &cj, &mstr, &m.CreatedAt, &m.Sender)
+	if err != nil {
+		return m, err
+	}
+	if err := json.Unmarshal([]byte(cj), &m.Content); err != nil {
+		return m, err
+	}
+	return m, nil
+}

@@ -97,6 +97,8 @@ CREATE TABLE media(
   expire_at  INTEGER NOT NULL
 );
 `,
+	// v2：流式回复——记录流式消息 ID，用于全量刷新（M1b）
+	`ALTER TABLE callback_task ADD COLUMN stream_message_id INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // migrate 依次执行未应用的迁移。
