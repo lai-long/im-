@@ -1,0 +1,19 @@
+{
+  "version": "v0.1 (M1a)",
+  "webhook_send": {
+    "ok": 0,
+    "invalid_webhook_key": 93000,
+    "bot_kicked": 93001,
+    "invalid_msgtype": 40058,
+    "invalid_content": 40008,
+    "content_too_big": 45002,
+    "invalid_json": 40035
+  },
+  "aibot_response": {
+    "ok": 0,
+    "invalid_response_code": 40001,
+    "invalid_msgtype": 40058,
+    "invalid_content": 40008,
+    "content_too_big": 45002
+  }
+}
