@@ -23,8 +23,8 @@ type WebhookPayload struct {
 // 推送失败会重试（最多 3 次），模拟真实 IM 平台的重推行为，
 // 订阅方需按 msg_id 自行做幂等去重。
 type WebhookManager struct {
-	mu    sync.RWMutex
-	urls  map[string]struct{}
+	mu     sync.RWMutex
+	urls   map[string]struct{}
 	client *http.Client
 }
 

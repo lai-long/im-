@@ -41,7 +41,7 @@ type webhookReq struct {
 	Voice *struct {
 		MediaID string `json:"media_id"`
 	} `json:"voice"`
-	Image       *struct {
+	Image *struct {
 		Base64 string `json:"base64"`
 		Md5    string `json:"md5"`
 	} `json:"image"`

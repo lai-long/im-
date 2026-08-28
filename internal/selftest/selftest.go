@@ -1,4 +1,4 @@
-// Package selftest 是回环自测：进程内启动平台 + mock 接入方，跑完 M1a 验收全链路。
+// Package selftest 是回环自测：进程内启动平台 + mock 接入方，跑完 M1a + M1b + M2 验收全链路。
 // 接入方侧使用企微官方加解密库（sbzhu/weworkapi_golang）实现，用于跨实现互通验证；
 // 平台侧走真实 HTTP 路由，覆盖 docs/方案文档.md §7 的验收标准 1–6。
 package selftest
@@ -268,7 +268,7 @@ func Run(dataDir string) int {
 	}
 
 	// 输出
-	fmt.Println("\n=== 回环自测（M1a + M1b 验收全链路）===")
+	fmt.Println("\n=== 回环自测（M1a + M1b + M2 验收全链路）===")
 	failed := 0
 	for _, c := range checks {
 		status := "PASS"

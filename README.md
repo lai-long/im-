@@ -53,14 +53,15 @@ curl -X POST 'http://127.0.0.1:7788/cgi-bin/webhook/send?key=<webhook_key>' \
    在群聊页发送 `@示例机器人 你好`，接入方以一次性 `stream`（`finish=true`）被动回复，
    回复出现在群里；也可用回调中的 `response_url` 异步主动回复（一次性、1 小时有效）。
 
-4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路，13 项）：
+4. **一键自测**（无需任何外部依赖，内置 mock 接入方跑完验收全链路，27 项）：
 
 ```bash
 make selftest
 ```
 
-   18 项覆盖：URL 验证握手、webhook/send（含错误码）、@机器人回调、流式多轮刷新、
-   response_url（一次性语义）、template_card、自建应用全链路（gettoken→message/send→XML 回调）、
+   27 项覆盖：URL 验证握手、webhook/send（含错误码、image/news/template_card/markdown_v2）、
+   @机器人回调、流式多轮刷新、response_url（一次性语义）、template_card、机器人单聊 + 进入会话欢迎语、
+   自建应用全链路（gettoken→message/send→XML 回调）、通讯录只读（user/get、user/simplelist）、
    TLS 自签证书。
 
 5. **流式回复**：接入方被动回复 `finish=false` 的 stream 消息，平台按 1s 节奏轮询刷新，
@@ -77,10 +78,12 @@ make selftest
   消息流水、回调重放）、回环自测、Go/Python 接入方示例。
 - **M1b 已完成**：流式回复轮询（1s 节奏、全量刷新覆盖同一条消息、6 分钟窗口）、
   template_card（被动回复与 response_url）、TLS 自签证书（`-tls`）。
-- **M2 进行中**：已完成——自建应用兼容（gettoken / message/send / XML 加密回调、应用单聊会话、
-  控制台管理）、明文回调模式、客户端多会话。待做——`webhook/upload_media` 素材（file/voice）、
-  机器人单聊（chattype=single）。
-- **M3**：智能机器人长连接模式同形模拟、卡片交互事件、OAuth2、hosts 劫持脚本。
+- **M2 已完成**：自建应用兼容（gettoken / message/send / XML 加密回调、应用单聊会话、控制台管理）、
+  明文回调模式、客户端多会话切换；`webhook/send` 扩展（markdown_v2 / image / news / file / voice /
+  template_card）；`webhook/upload_media` 素材（file/voice）；机器人单聊（chattype=single）+ 进入会话
+  欢迎语被动回复；通讯录只读（user/get、user/simplelist）；错误码对照表与机器可读 JSON 补全；
+  selftest 扩至 27 项。
+- **M3**（未启动）：智能机器人长连接模式同形模拟、卡片交互事件、OAuth2、hosts 劫持脚本、消息导出。
 
 ## 目录结构
 

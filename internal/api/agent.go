@@ -203,10 +203,10 @@ func userGetHandler(st *store.Store) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, map[string]any{
-			"errcode": 0,
-			"errmsg":  "ok",
-			"userid":  u.Userid,
-			"name":    u.Name,
+			"errcode":    0,
+			"errmsg":     "ok",
+			"userid":     u.Userid,
+			"name":       u.Name,
 			"department": []int64{1},
 		})
 	}
