@@ -155,3 +155,31 @@ func (s *Store) SeedWebhookInfo() (SeedWebhookInfo, error) {
 }
 
 func now() int64 { return time.Now().Unix() }
+
+// ListChats 列出全部群。
+func (s *Store) ListChats() ([]Chat, error) {
+	rows, err := s.db.Query(`SELECT id, chatid, name FROM chat ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Chat
+	for rows.Next() {
+		var c Chat
+		if err := rows.Scan(&c.ID, &c.Chatid, &c.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// FirstCorp 返回预置默认企业。
+func (s *Store) FirstCorp() (Corp, error) {
+	var c Corp
+	err := s.db.QueryRow(`SELECT id, corpid, name FROM corp ORDER BY id LIMIT 1`).Scan(&c.ID, &c.CorpID, &c.Name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
