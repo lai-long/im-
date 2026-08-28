@@ -280,9 +280,18 @@ func Run(dataDir string) int {
 			} else {
 				ok := waitUntil(func() bool { return wsc.received.Load() >= 1 }, 5*time.Second)
 				fr := wsc.last()
+				textOK := false
+				if fr != nil {
+					if t, ok := fr["text"].(map[string]any); ok {
+						if s, ok := t["content"].(string); ok {
+							textOK = s != ""
+						}
+					}
+				}
 				fieldsOK := ok && fr != nil && fr["msgtype"] == "text" &&
-					fr["chattype"] == "group" && fr["from"].(map[string]any)["userid"] == "zhangsan"
-				add("长连接 收到消息回调", fieldsOK, "aibot_msg_callback 字段完整")
+					fr["chattype"] == "group" && fr["from"].(map[string]any)["userid"] == "zhangsan" &&
+					textOK
+				add("长连接 收到消息回调", fieldsOK, "aibot_msg_callback 字段完整（含 text.content）")
 			}
 			okReply := waitUntil(func() bool {
 				return countMessages(st, chat.ID, "stream") > streamBefore

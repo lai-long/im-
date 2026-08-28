@@ -122,15 +122,13 @@ func (d *Dispatcher) EnqueueUserMessage(msg store.Message, bot store.Bot) {
 	}
 	responseCode := store.NewRandomString(24)
 	payload := map[string]any{
-		"msgid":    msg.Msgid,
-		"aibotid":  bot.Aibotid,
-		"chatid":   chat.Chatid,
-		"chattype": "group",
-		"from":     map[string]any{"userid": user.Userid},
-		"msgtype":  msg.MsgType,
-		"msg":      msg.Content,
-		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s",
-			d.base, responseCode),
+		"msgid":        msg.Msgid,
+		"aibotid":      bot.Aibotid,
+		"chatid":       chat.Chatid,
+		"chattype":     "group",
+		"from":         map[string]any{"userid": user.Userid},
+		"msgtype":      msg.MsgType,
+		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s", d.base, responseCode),
 	}
 	switch msg.MsgType {
 	case "text":
@@ -161,14 +159,12 @@ func (d *Dispatcher) EnqueueBotSingleMessage(msg store.Message, bot store.Bot) {
 	}
 	responseCode := store.NewRandomString(24)
 	payload := map[string]any{
-		"msgid":    msg.Msgid,
-		"aibotid":  bot.Aibotid,
-		"chattype": "single",
-		"from":     map[string]any{"userid": user.Userid},
-		"msgtype":  msg.MsgType,
-		"msg":      msg.Content,
-		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s",
-			d.base, responseCode),
+		"msgid":        msg.Msgid,
+		"aibotid":      bot.Aibotid,
+		"chattype":     "single",
+		"from":         map[string]any{"userid": user.Userid},
+		"msgtype":      msg.MsgType,
+		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/response?response_code=%s", d.base, responseCode),
 	}
 	switch msg.MsgType {
 	case "text":
@@ -496,7 +492,14 @@ func (d *Dispatcher) processWS(task store.CallbackTask, bot store.Bot, msg store
 				}
 				return
 			}
-			// finish=false 的流式帧：已更新消息，继续等待下一帧
+			// finish=false 的流式帧：已更新消息，重置单帧超时，继续等下一帧
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(timeout)
 		case <-timer.C:
 			if lastErr != "" {
 				d.retryOrDead(task, lastErr)
@@ -525,13 +528,10 @@ func (d *Dispatcher) wsFrame(pf map[string]any, msgid string) map[string]any {
 		}
 		fields["event"] = event
 		return botws.EventFrame(event, fields)
-	case "text":
-		if c, ok := pf["text"].(string); ok {
-			fields["text"] = map[string]any{"content": c}
-		}
-	case "markdown":
-		if c, ok := pf["markdown"].(string); ok {
-			fields["markdown"] = map[string]any{"content": c}
+	case "text", "markdown":
+		// 载荷里 text/markdown 已是 {"content":"..."} map（见 Enqueue*），直接透传
+		if v, ok := pf[msgtype]; ok {
+			fields[msgtype] = v
 		}
 	}
 	return botws.CallbackFrame(msgtype, fields)

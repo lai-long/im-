@@ -105,8 +105,12 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	cl := &client{botID: botID, ws: c, hub: h}
 	h.mu.Lock()
+	old := h.clients[botID]
 	h.clients[botID] = cl
 	h.mu.Unlock()
+	if old != nil {
+		old.close() // 同一机器人重复订阅：关闭旧连接，避免残留读循环干扰
+	}
 	defer func() {
 		h.mu.Lock()
 		if h.clients[botID] == cl {
@@ -145,6 +149,8 @@ func (c *client) writeJSON(v any) error {
 	defer c.mu.Unlock()
 	return c.ws.WriteJSON(v)
 }
+
+func (c *client) close() { _ = c.ws.Close() }
 
 // Frame helper: 便捷构造回调帧。
 func CallbackFrame(msgtype string, fields map[string]any) map[string]any {
