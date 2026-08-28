@@ -158,7 +158,7 @@ function render(m) {
   const tag = m.sender_type === 'bot' ? '<span class="bot-tag">bot</span>' : '';
   const time = new Date(m.ts / 1000).toLocaleTimeString();
   const typing = (m.msgtype === 'stream' && m.content && m.content.finish === false) ? ' <span class="typing">生成中…</span>' : '';
-  div.innerHTML = `<div class="meta">${tag}${m.sender} · ${time}${typing}</div><div class="content">${bodyHtml(m)}</div>`;
+  div.innerHTML = `<div class="meta">${tag}${escapeHtml(m.sender)} · ${time}${typing}</div><div class="content">${bodyHtml(m)}</div>`;
   $('#msgs').appendChild(div);
   $('#msgs').scrollTop = $('#msgs').scrollHeight;
 }

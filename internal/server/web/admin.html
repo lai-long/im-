@@ -78,22 +78,25 @@
 const $ = s => document.querySelector(s);
 const jpost = async (u, body) => (await fetch(u, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })).json();
 const jget = async u => (await fetch(u)).json();
+// HTML/属性转义：所有用户可控值（名称/密钥/URL/错误）插值前必须过这两个
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const eattr = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 async function loadBots() {
   const bots = await jget('/admin/bots');
   const chats = await jget('/admin/chats');
   $('#bots').innerHTML = bots.map(b => `
     <table>
-      <tr><th style="width:120px">名称</th><td>${b.name}${b.callback_verified
+      <tr><th style="width:120px">名称</th><td>${esc(b.name)}${b.callback_verified
         ? ' <span class="badge ok">回调已验证</span>' : ' <span class="badge bad">回调未验证</span>'}</td></tr>
-      <tr><th>aibotid</th><td><code>${b.aibotid}</code></td></tr>
-      <tr><th>Token</th><td><code>${b.callback_token}</code></td></tr>
-      <tr><th>EncodingAESKey</th><td><code>${b.callback_aes_key}</code></td></tr>
-      <tr><th>回调 URL</th><td>${b.callback_url ? `<code>${b.callback_url}</code>（${b.callback_mode}）` : '<span class="muted">未配置</span>'}</td></tr>
-      <tr><th>webhook</th><td>${(b.keys||[]).map(k => `<div>${k.name}: <code>/cgi-bin/webhook/send?key=${k.webhook_key}</code></div>`).join('') || '<span class="muted">未入群</span>'}</td></tr>
+      <tr><th>aibotid</th><td><code>${esc(b.aibotid)}</code></td></tr>
+      <tr><th>Token</th><td><code>${esc(b.callback_token)}</code></td></tr>
+      <tr><th>EncodingAESKey</th><td><code>${esc(b.callback_aes_key)}</code></td></tr>
+      <tr><th>回调 URL</th><td>${b.callback_url ? `<code>${esc(b.callback_url)}</code>（${esc(b.callback_mode)}）` : '<span class="muted">未配置</span>'}</td></tr>
+      <tr><th>webhook</th><td>${(b.keys||[]).map(k => `<div>${esc(k.name)}: <code>/cgi-bin/webhook/send?key=${esc(k.webhook_key)}</code></div>`).join('') || '<span class="muted">未入群</span>'}</td></tr>
       <tr><th>操作</th><td>
         <div class="row">
-          <input type="text" id="url-${b.id}" placeholder="回调 URL，如 http://127.0.0.1:9000/wecom" value="${b.callback_url}">
+          <input type="text" id="url-${b.id}" placeholder="回调 URL，如 http://127.0.0.1:9000/wecom" value="${eattr(b.callback_url)}">
           <select id="mode-${b.id}">
             <option value="encrypted"${b.callback_mode==='encrypted'?' selected':''}>encrypted</option>
             <option value="plain"${b.callback_mode==='plain'?' selected':''}>plain</option>
@@ -113,15 +116,15 @@ async function loadAgents() {
     const a = x.agent;
     return `
     <table>
-      <tr><th style="width:120px">名称</th><td>${a.name}${a.callback_verified
+      <tr><th style="width:120px">名称</th><td>${esc(a.name)}${a.callback_verified
         ? ' <span class="badge ok">回调已验证</span>' : ' <span class="badge bad">回调未验证</span>'}</td></tr>
-      <tr><th>agentid</th><td><code>${a.agentid}</code></td></tr>
-      <tr><th>corpid</th><td><code>${x.corpid}</code></td></tr>
-      <tr><th>corpsecret</th><td><code>${a.corpsecret}</code></td></tr>
-      <tr><th>gettoken</th><td><code>${x.gettoken}</code></td></tr>
-      <tr><th>回调三元组</th><td>Token <code>${a.callback_token}</code> / AESKey <code>${a.callback_aes_key}</code></td></tr>
+      <tr><th>agentid</th><td><code>${esc(a.agentid)}</code></td></tr>
+      <tr><th>corpid</th><td><code>${esc(x.corpid)}</code></td></tr>
+      <tr><th>corpsecret</th><td><code>${esc(a.corpsecret)}</code></td></tr>
+      <tr><th>gettoken</th><td><code>${esc(x.gettoken)}</code></td></tr>
+      <tr><th>回调三元组</th><td>Token <code>${esc(a.callback_token)}</code> / AESKey <code>${esc(a.callback_aes_key)}</code></td></tr>
       <tr><th>操作</th><td><div class="row">
-        <input type="text" id="aurl-${a.id}" placeholder="回调 URL（自建应用 XML 回调）" value="${a.callback_url}">
+        <input type="text" id="aurl-${a.id}" placeholder="回调 URL（自建应用 XML 回调）" value="${eattr(a.callback_url)}">
         <select id="amode-${a.id}">
           <option value="encrypted"${a.callback_mode==='encrypted'?' selected':''}>encrypted</option>
           <option value="plain"${a.callback_mode==='plain'?' selected':''}>plain</option>
@@ -177,9 +180,9 @@ async function loadTasks() {
   $('#tasks').innerHTML = tasks.length ? `<table>
     <tr><th>ID</th><th>状态</th><th>尝试</th><th>机器人</th><th>最近错误</th><th>操作</th></tr>
     ${tasks.map(t => `<tr>
-      <td>${t.id}</td><td>${t.status}</td><td>${t.attempt}</td><td>${t.bot_id}</td>
-      <td class="muted">${t.last_error || ''}</td>
-      <td><button class="ghost" onclick="replay(${t.id})">重放</button></td>
+      <td>${esc(t.id)}</td><td>${esc(t.status)}</td><td>${esc(t.attempt)}</td><td>${esc(t.bot_id)}</td>
+      <td class="muted">${esc(t.last_error || '')}</td>
+      <td><button class="ghost" onclick="replay(${esc(t.id)})">重放</button></td>
     </tr>`).join('')}</table>` : '<div class="muted">无</div>';
 }
 
@@ -193,11 +196,11 @@ async function loadMessages() {
   $('#msgs').innerHTML = msgs.length ? `<table>
     <tr><th>msgid</th><th>发送者</th><th>类型</th><th>内容</th><th>提及</th></tr>
     ${msgs.map(m => `<tr>
-      <td><code>${m.msgid}</code></td>
-      <td>${m.sender}${m.sender_type === 'bot' ? ' (bot)' : ''}</td>
-      <td>${m.msgtype}</td>
-      <td><pre>${JSON.stringify(m.content)}</pre></td>
-      <td class="muted">${(m.mentioned || []).join(', ')}</td>
+      <td><code>${esc(m.msgid)}</code></td>
+      <td>${esc(m.sender)}${m.sender_type === 'bot' ? ' (bot)' : ''}</td>
+      <td>${esc(m.msgtype)}</td>
+      <td><pre>${esc(JSON.stringify(m.content))}</pre></td>
+      <td class="muted">${esc((m.mentioned || []).join(', '))}</td>
     </tr>`).join('')}</table>` : '<div class="muted">无</div>';
 }
 
