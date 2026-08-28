@@ -30,6 +30,12 @@
   .news a { font-weight: 600; color: #1a73e8; text-decoration: none; }
   .news-desc { color: #666; font-size: 13px; margin-top: 2px; }
   .card { border: 1px solid #d6e4ff; background: #f5f9ff; border-radius: 6px; padding: 8px 10px; }
+  .card-title { font-weight: 600; margin-top: 2px; }
+  .card-desc { color: #666; font-size: 13px; margin-top: 2px; }
+  .card-h { display: flex; justify-content: space-between; color: #444; font-size: 13px; margin-top: 4px; }
+  .card-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .card-btns button, .card + select, .card + button[data-card-sel] { margin-top: 6px; }
+  .card select { padding: 4px 6px; border: 1px solid #ccc; border-radius: 6px; }
   footer { display: flex; gap: 8px; padding: 10px 16px; background: #fff; border-top: 1px solid #e0e0e0; }
   #input { flex: 1; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; }
   button { padding: 8px 18px; border: 0; border-radius: 6px; background: #3a6ea5; color: #fff; cursor: pointer; }
@@ -147,7 +153,29 @@ function bodyHtml(m) {
     case 'template_card': {
       const t = c.card_type || '';
       const title = (c.main_title && c.main_title.title) || '';
-      return `<div class="card"><b>卡片·${escapeHtml(t)}</b><div>${escapeHtml(title)}</div></div>`;
+      const desc = (c.main_title && c.main_title.desc) || '';
+      let html = `<div class="card"><b>卡片·${escapeHtml(t)}</b><div class="card-title">${escapeHtml(title)}</div>`;
+      if (desc) html += `<div class="card-desc">${escapeHtml(desc)}</div>`;
+      if (Array.isArray(c.horizontal_content_list)) {
+        html += c.horizontal_content_list.map(h =>
+          `<div class="card-h"><span>${escapeHtml(h.keyname || '')}</span><span>${escapeHtml(h.value || '')}</span></div>`).join('');
+      }
+      // 按钮区（button_list）→ 交互回调
+      if (Array.isArray(c.button_list) && c.button_list.length) {
+        html += '<div class="card-btns">' + c.button_list.map((b, i) =>
+          `<button data-card-msgid="${escapeAttr(m.msgid)}" data-card-key="${escapeAttr(b.key || '')}" data-card-idx="${i}">${escapeHtml(b.text || '')}</button>`).join('') + '</div>';
+      }
+      // 单选/下拉选项（button_selection）→ 选中项作为 event_key
+      if (Array.isArray(c.button_selection)) {
+        c.button_selection.forEach(sel => {
+          const opts = (sel.option_list || []).map(o =>
+            `<option value="${escapeAttr(o.id || '')}">${escapeHtml(o.text || '')}</option>`).join('');
+          html += `<select data-card-msgid="${escapeAttr(m.msgid)}">${opts}</select>`;
+        });
+        html += `<button data-card-msgid="${escapeAttr(m.msgid)}" data-card-sel="1">确定</button>`;
+      }
+      html += '</div>';
+      return html;
     }
     case 'file':
       return `<a href="/api/media/${escapeAttr(c.media_id || '')}">📎 文件 ${escapeAttr(c.media_id || '')}</a>`;
@@ -202,6 +230,23 @@ async function send() {
 
 $('#send').onclick = send;
 $('#input').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+// 模板卡片交互：点击按钮/确认选项 → /api/card/interact（触发 template_card_event 回调）
+$('#msgs').addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-card-msgid]');
+  if (!btn) return;
+  const msgid = btn.dataset.cardMsgid;
+  let eventKey = btn.dataset.cardKey;
+  let selection = null;
+  if (btn.dataset.cardSel) {
+    const sel = document.querySelector(`select[data-card-msgid="${CSS.escape(msgid)}"]`);
+    if (sel) eventKey = sel.value;
+  }
+  if (eventKey === undefined) return;
+  const body = { userid: me.userid, msgid, event_key: String(eventKey) };
+  if (selection) body.button_selection = selection;
+  await fetch('/api/card/interact', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+});
 boot();
 </script>
 </body>

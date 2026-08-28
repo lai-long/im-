@@ -260,11 +260,13 @@ func Run(dataDir string) int {
 	}
 
 	// 6e. 机器人长连接（M3）：wss 订阅 + aibot_msg_callback + aibot_respond_msg
+	var wsc *wsBot
 	fullBot, err := st.GetBot(bot.ID)
 	if err != nil {
 		add("长连接 wss 订阅", false, err.Error())
 	} else {
-		wsc, werr := dialWSBot(plat.URL, fullBot.Aibotid, fullBot.Secret)
+		var werr error
+		wsc, werr = dialWSBot(plat.URL, fullBot.Aibotid, fullBot.Secret)
 		if werr != nil {
 			add("长连接 wss 订阅", false, werr.Error())
 		} else {
@@ -304,6 +306,50 @@ func Run(dataDir string) int {
 					return countMessages(st, sc.ID, "stream") > entryBefore
 				}, 5*time.Second)
 				add("长连接 欢迎语回复落单聊", okEntry, "event → 被动回复")
+			}
+		}
+	}
+
+	// 6f. 模板卡片交互（M3）：按钮点击 → template_card_event 回调 → update_template_card 原地更新
+	if wsc != nil {
+		cardMsgid := lastCardMsgid(st, chat.ID)
+		if cardMsgid == "" {
+			add("卡片交互 事件回调", false, "未找到 template_card 消息")
+		} else {
+			code, msg := postJSON(plat.URL+"/api/card/interact",
+				fmt.Sprintf(`{"userid":"zhangsan","msgid":%q,"event_key":"btn_ok"}`, cardMsgid))
+			add("卡片交互 事件回调", code == 0, msg)
+			var cardFrame map[string]any
+			okEvent := waitUntil(func() bool {
+				for _, f := range wsc.snapshot() {
+					if f["type"] == "aibot_event_callback" && f["event"] == "template_card_event" {
+						cardFrame = f
+						return true
+					}
+				}
+				return false
+			}, 5*time.Second)
+			add("卡片交互 接入方收到事件", okEvent, "template_card_event 送达")
+
+			// 接入方用事件中的 response_url（update_template_card）更新原卡片
+			if cardFrame != nil {
+				ru, _ := cardFrame["response_url"].(string)
+				if u2, uerr := url.Parse(ru); uerr == nil {
+					// 事件帧里的 response_url 以配置 Base 生成（selftest 端口为 0），
+					// 这里改为向真实服务器地址 POST，仅复用其中的 response_code
+					code, msg = postJSON(plat.URL+u2.Path+"?"+u2.RawQuery,
+						`{"template_card":{"card_type":"text_notice","main_title":{"title":"已确认 ✅"}}}`)
+					updated := waitUntil(func() bool {
+						mm, _ := st.GetMessageByMsgid(cardMsgid)
+						if t, ok := mm.Content["main_title"].(map[string]any); ok {
+							return t["title"] == "已确认 ✅"
+						}
+						return false
+					}, 3*time.Second)
+					add("卡片交互 卡片原地更新", code == 0 && updated, "update_template_card → 原 msgid 内容替换")
+				} else {
+					add("卡片交互 卡片原地更新", false, "事件缺 response_url")
+				}
 			}
 		}
 	}
@@ -625,3 +671,14 @@ func (w *wsBot) snapshot() []map[string]any {
 }
 
 func (w *wsBot) close() { _ = w.conn.Close() }
+
+// lastCardMsgid 返回某会话最近一条 template_card 消息的 msgid（卡片交互自测用）。
+func lastCardMsgid(st *store.Store, chatID int64) string {
+	msgs, _ := st.ListMessages(chatID, 200)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].MsgType == "template_card" {
+			return msgs[i].Msgid
+		}
+	}
+	return ""
+}

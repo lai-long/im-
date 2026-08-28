@@ -110,6 +110,29 @@ func (s *Store) ChatBots(chatID int64) ([]Bot, error) {
 	return out, nil
 }
 
+// GetMessageByMsgid 按 msgid 取消息（模板卡片交互定位用）。
+func (s *Store) GetMessageByMsgid(msgid string) (Message, error) {
+	var m Message
+	var cj, mstr string
+	err := s.db.QueryRow(`
+		SELECT m.id, m.msgid, m.chat_id, m.sender_type, m.sender_id, m.msg_type, m.content_json, m.mentioned, m.created_at
+		FROM message m WHERE m.msgid=?`, msgid).
+		Scan(&m.ID, &m.Msgid, &m.ChatID, &m.SenderTyp, &m.SenderID, &m.MsgType, &cj, &mstr, &m.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	if err != nil {
+		return m, err
+	}
+	if err := json.Unmarshal([]byte(cj), &m.Content); err != nil {
+		return m, err
+	}
+	if mstr != "" {
+		_ = json.Unmarshal([]byte(mstr), &m.Mentioned)
+	}
+	return m, nil
+}
+
 // CreateUser 创建新用户并加入默认群（自动注册，客户端"昵称登录"用）。
 func (s *Store) CreateUser(corpID int64, name string) (User, error) {
 	userid := "u" + NewRandomString(6)

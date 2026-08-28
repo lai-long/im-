@@ -218,6 +218,43 @@ func (d *Dispatcher) EnqueueBotEntry(chat store.Chat, bot store.Bot, user store.
 	d.wakeLoop()
 }
 
+// EnqueueCardEvent 用户在模板卡片上点击按钮/选项时，创建"卡片交互事件"回调任务
+// （event=template_card_event）。response_url 指向 update_template_card，接入方据此
+// 更新原卡片（1 小时内可多次更新）。
+func (d *Dispatcher) EnqueueCardEvent(cardMsg store.Message, bot store.Bot, user store.User, eventKey, taskID string, extra map[string]any) {
+	chat, err := d.st.GetChat(cardMsg.ChatID)
+	if err != nil {
+		return
+	}
+	responseCode := store.NewRandomString(24)
+	payload := map[string]any{
+		"msgid":     store.NewMsgID(),
+		"aibotid":   bot.Aibotid,
+		"chatid":    chat.Chatid,
+		"chattype":  chat.Type,
+		"from":      map[string]any{"userid": user.Userid},
+		"msgtype":   "event",
+		"event":     "template_card_event",
+		"event_key": eventKey,
+		"task_id":   taskID,
+		"response_url": fmt.Sprintf("%s/cgi-bin/aibot/update_template_card?response_code=%s",
+			d.base, responseCode),
+	}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	// 关联到卡片消息本身：update_template_card 用 response_code 找到并原地替换该卡片
+	if _, err := d.st.CreateCallbackTask(cardMsg.ID, bot.ID, "bot", string(raw), responseCode,
+		time.Now().Add(store.ResponseCodeTTL).Unix()); err != nil {
+		return
+	}
+	d.wakeLoop()
+}
+
 // EnqueueAgentMessage 用户在"用户↔自建应用"单聊发消息时创建推送任务（XML 回调）。
 func (d *Dispatcher) EnqueueAgentMessage(msg store.Message, agent store.Agent) {
 	user, err := d.st.GetUserByID(msg.SenderID)
@@ -474,7 +511,7 @@ func (d *Dispatcher) processWS(task store.CallbackTask, bot store.Bot, msg store
 // wsFrame 由回调载荷构造长连接帧（对齐官方 aibot_msg_callback / aibot_event_callback）。
 func (d *Dispatcher) wsFrame(pf map[string]any, msgid string) map[string]any {
 	fields := map[string]any{"msgid": msgid}
-	for _, k := range []string{"aibotid", "chatid", "chattype", "from"} {
+	for _, k := range []string{"aibotid", "chatid", "chattype", "from", "response_url"} {
 		if v, ok := pf[k]; ok {
 			fields[k] = v
 		}
