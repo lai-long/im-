@@ -19,13 +19,15 @@ func NewUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// NewRandomString 生成 n 字节随机数的 base64 字符串（无填充）。
+// NewRandomString 生成 n 字节随机数的 URL-safe base64 字符串（无填充）。
+// 使用 RawURLEncoding：该值会作为 response_code 出现在 URL 查询串中，
+// 标准 base64 的 '+' 会在解析时被当作空格，导致校验失败。
 func NewRandomString(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
-	return base64.RawStdEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // NewToken 生成回调 Token（≤32 位，字母数字）。
