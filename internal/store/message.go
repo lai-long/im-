@@ -12,7 +12,7 @@ type Message struct {
 	ID        int64          `json:"id"`
 	Msgid     string         `json:"msgid"`
 	ChatID    int64          `json:"-"`
-	Sender    string         `json:"sender"`       // 展示名
+	Sender    string         `json:"sender"` // 展示名
 	SenderID  int64          `json:"-"`
 	SenderTyp string         `json:"sender_type"` // user | bot
 	MsgType   string         `json:"msgtype"`

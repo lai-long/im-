@@ -25,8 +25,8 @@ const (
 
 // webhookReq 是 webhook/send 请求体（M1a：text / markdown）。
 type webhookReq struct {
-	MsgType  string `json:"msgtype"`
-	Text     *struct {
+	MsgType string `json:"msgtype"`
+	Text    *struct {
 		Content             string   `json:"content"`
 		MentionedList       []string `json:"mentioned_list"`
 		MentionedMobileList []string `json:"mentioned_mobile_list"`

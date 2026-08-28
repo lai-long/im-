@@ -9,17 +9,17 @@ import (
 
 // CallbackTask 是一次待推送的回调任务。
 type CallbackTask struct {
-	ID         int64  `json:"id"`
-	MessageID  int64  `json:"message_id"`
-	BotID      int64  `json:"bot_id"`
-	Payload    string `json:"payload"` // 加密前明文 JSON
+	ID           int64  `json:"id"`
+	MessageID    int64  `json:"message_id"`
+	BotID        int64  `json:"bot_id"`
+	Payload      string `json:"payload"` // 加密前明文 JSON
 	ResponseCode string `json:"response_code"`
-	StreamID   string `json:"stream_id"`
-	StreamFin  bool   `json:"stream_finished"`
-	Status     string `json:"status"`
-	Attempt    int    `json:"attempt"`
-	NextRetry  int64  `json:"next_retry_at"`
-	LastError  string `json:"last_error"`
+	StreamID     string `json:"stream_id"`
+	StreamFin    bool   `json:"stream_finished"`
+	Status       string `json:"status"`
+	Attempt      int    `json:"attempt"`
+	NextRetry    int64  `json:"next_retry_at"`
+	LastError    string `json:"last_error"`
 }
 
 // ResponseCodeTTL 是 response_url 的有效期（企微：1 小时）。

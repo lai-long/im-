@@ -65,10 +65,10 @@ func TestOurEncryptOfficialDecrypt(t *testing.T) {
 }
 
 type officialEnvelope struct {
-	Encrypt     string `xml:"Encrypt"`
+	Encrypt      string `xml:"Encrypt"`
 	MsgSignature string `xml:"MsgSignature"`
-	TimeStamp   string `xml:"TimeStamp"`
-	Nonce       string `xml:"Nonce"`
+	TimeStamp    string `xml:"TimeStamp"`
+	Nonce        string `xml:"Nonce"`
 }
 
 func TestOfficialEncryptOurDecrypt(t *testing.T) {

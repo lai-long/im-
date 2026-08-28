@@ -59,9 +59,9 @@ func NewMsgID() string {
 }
 
 // NewChatID / NewAibotid 生成对齐企微前缀风格的 ID。
-func NewChatID() string   { return "wr" + NewRandomString(12) }
-func NewAibotid() string  { return "wb" + NewRandomString(12) }
-func NewCorpid() string   { return "ww_local_" + NewRandomString(8) }
+func NewChatID() string  { return "wr" + NewRandomString(12) }
+func NewAibotid() string { return "wb" + NewRandomString(12) }
+func NewCorpid() string  { return "ww_local_" + NewRandomString(8) }
 
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
