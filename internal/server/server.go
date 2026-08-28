@@ -88,6 +88,10 @@ func (s *Server) Handler() http.Handler {
 
 	// 嵌入式 Web 页面（群聊客户端 / 控制台）
 	sub, _ := fs.Sub(webFS, "web")
+	// 控制台页固定挂在 /admin（README/启动日志均以此地址为准）
+	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, sub, "admin.html")
+	})
 	mux.Handle("GET /", http.FileServer(http.FS(sub)))
 
 	return mux
