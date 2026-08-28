@@ -401,7 +401,7 @@ func (s *Store) ValidateToken(tk string) (int64, error) {
 // ChatsOfUser 列出用户参与的会话：群聊 + 与自建应用的单聊。
 func (s *Store) ChatsOfUser(userID int64) ([]Chat, error) {
 	rows, err := s.db.Query(`
-		SELECT c.id, c.chatid, c.name, c.type, c.agent_id
+		SELECT c.id, c.chatid, c.name, c.type, c.agent_id, c.bot_id
 		FROM chat_member m JOIN chat c ON c.id = m.chat_id
 		WHERE m.user_id = ? ORDER BY c.id`, userID)
 	if err != nil {

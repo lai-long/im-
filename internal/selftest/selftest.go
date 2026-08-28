@@ -202,6 +202,61 @@ func Run(dataDir string) int {
 		}
 	}
 
+	// 6b. 机器人单聊（chattype=single）+ 进入会话事件欢迎语（M2）
+	u, _ = st.GetUserByUserid("zhangsan")
+	singleMock := newMockReceiver(bot.CallbackToken, bot.CallbackAESKey, false)
+	_ = st.UpdateBotCallback(bot.ID, singleMock.URL, bot.CallbackToken, bot.CallbackAESKey, "encrypted")
+	singleChat, created, err := st.OpenBotSingleChat(bot.ID, u.ID, bot.Name)
+	if err != nil || !created {
+		add("机器人单聊·创建会话", false, err.Error())
+	} else {
+		add("机器人单聊·创建会话", true, "chattype=single")
+		srv.Dispatcher.EnqueueBotEntry(singleChat, bot, u)
+		ok := waitUntil(func() bool { return countMessages(st, singleChat.ID, "stream") >= 1 }, 5*time.Second)
+		add("机器人单聊·进入会话欢迎语", ok, "event 回调 → 被动回复落单聊")
+		if _, _, err := srv.Core.UserMessage(singleChat.ID, u.ID, "在吗"); err != nil {
+			add("机器人单聊·用户发言触发回调", false, err.Error())
+		} else {
+			ok2 := waitUntil(func() bool { return countMessages(st, singleChat.ID, "stream") >= 2 }, 5*time.Second)
+			add("机器人单聊·被动回复落群", ok2, "chattype=single 无 chatid")
+		}
+	}
+
+	// 6c. webhook/send 扩展消息类型（image / news / template_card）
+	for _, tc := range []struct{ mt, body string }{
+		{"image", `{"msgtype":"image","image":{"base64":"aGVsbG8=","md5":"x"}}`},
+		{"news", `{"msgtype":"news","news":{"articles":[{"title":"t","description":"d","url":"http://x","picurl":""}]}}`},
+		{"template_card", `{"msgtype":"template_card","template_card":{"card_type":"text_notice","main_title":{"title":"构建"}}}`},
+	} {
+		code, msg := postJSON(plat.URL+"/cgi-bin/webhook/send?key="+store.SeedWebhookKey, tc.body)
+		add("webhook/send "+tc.mt, code == 0, msg)
+	}
+	okImg := waitUntil(func() bool {
+		return countMessages(st, chat.ID, "image") == 1 &&
+			countMessages(st, chat.ID, "news") == 1 &&
+			countMessages(st, chat.ID, "template_card") >= 1
+	}, 3*time.Second)
+	add("webhook 新类型落群", okImg, "image/news/template_card 已落库")
+
+	// 6d. 通讯录只读（M2）：user/get、user/simplelist
+	if corp.CorpID != "" {
+		if agent2, aerr := st.GetAgent(1); aerr == nil {
+			gt := getJSON(plat.URL + "/cgi-bin/gettoken?corpid=" + corp.CorpID + "&corpsecret=" + url.QueryEscape(agent2.Corpsecret))
+			if tk, ok := gt["access_token"].(string); ok && tk != "" {
+				cug := getJSON(plat.URL + "/cgi-bin/user/get?access_token=" + tk + "&userid=zhangsan")
+				add("通讯录 user/get", cug["errcode"] == 0.0 && cug["name"] == "张三", "userid→姓名")
+				csl := getJSON(plat.URL + "/cgi-bin/user/simplelist?access_token=" + tk)
+				if lst, ok := csl["userlist"].([]any); ok {
+					add("通讯录 user/simplelist", csl["errcode"] == 0.0 && len(lst) > 0, "用户列表非空")
+				} else {
+					add("通讯录 user/simplelist", false, "userlist 缺失")
+				}
+			} else {
+				add("通讯录 user/get", false, "gettoken 失败")
+			}
+		}
+	}
+
 	// 7. TLS 自签证书（M1b）
 	certFile, keyFile, err := server.EnsureSelfSignedCert(dir)
 	if err != nil {
@@ -246,6 +301,18 @@ func postJSON(url, body string) (int, string) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return out.Errcode, out.Errmsg
+}
+
+// getJSON 发送 GET 并解析整个 JSON 响应。
+func getJSON(url string) map[string]any {
+	resp, err := http.Get(url)
+	if err != nil {
+		return map[string]any{"errcode": -1, "errmsg": err.Error()}
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return out
 }
 
 // waitFor 等待聊天内出现指定类型的消息，返回其内容摘要。

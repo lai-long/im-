@@ -55,3 +55,37 @@ func TestOpenMigrateSeed(t *testing.T) {
 		t.Fatal("ID 生成器形态异常")
 	}
 }
+
+// TestChatsOfUser 确保列数与 scanChatFull 一致（曾因漏选 bot_id 导致扫描报错返回空）。
+func TestChatsOfUser(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	corp, _ := st.FirstCorp()
+	bot, _ := st.CreateBot(corp.ID, "botA")
+	chat, _, _ := st.GetChatByWebhookKey(SeedWebhookKey)
+	st.AddBotToChat(chat.ID, bot.ID)
+	u, _ := st.GetUserByUserid("zhangsan")
+	// 用户加入群
+	st.db.Exec(`INSERT OR IGNORE INTO chat_member(chat_id, user_id) VALUES(?,?)`, chat.ID, u.ID)
+	// 单聊会话（自建应用）
+	agent, _ := st.CreateAgent(corp.ID, "appA")
+	dc, _ := st.CreateDirectChat(agent.ID, u.ID, agent.Name)
+	_ = dc
+	chats, err := st.ChatsOfUser(u.ID)
+	if err != nil {
+		t.Fatalf("ChatsOfUser 报错: %v", err)
+	}
+	if len(chats) != 2 {
+		t.Fatalf("期望 2 个会话（群 + 单聊），实际 %d", len(chats))
+	}
+	// 机器人单聊
+	sc, _, _ := st.OpenBotSingleChat(bot.ID, u.ID, bot.Name)
+	_ = sc
+	chats, _ = st.ChatsOfUser(u.ID)
+	if len(chats) != 3 {
+		t.Fatalf("期望 3 个会话，实际 %d", len(chats))
+	}
+}
