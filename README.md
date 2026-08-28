@@ -12,8 +12,11 @@
 ## 快速开始
 
 ```bash
-make run          # 默认 :7788，首次启动自动初始化数据目录 ./data
+./run.sh            # 一键：构建前端+后端、启动 :7788、打开浏览器并打印接入信息
+# 或 make run      # 仅构建并启动（默认 :7788，首次启动自动初始化 ./data）
 ```
+
+> 构建前端需要 Node（Vite + tsc）；首次会自动 `npm install`。仅改后端可 `make build`。
 
 启动后日志会打印开箱即用的接入信息：
 
@@ -99,25 +102,32 @@ make selftest
 
 ```
 cmd/im-server/      入口
+web/                React + TS + Vite 前端（client/admin 双入口，构建产物 embed 进单二进制）
 internal/api/       企微兼容层（/cgi-bin/*）与客户端接口（/api/*）
-internal/callback/  回调分发器：加解密、URL 验证、推送队列与重试
+internal/callback/  回调分发器：加解密、URL 验证、推送队列与重试、长连接推送
+internal/botws/     机器人长连接 hub（M3）
 internal/core/      消息核心：落库、@解析、事件广播
 internal/admin/     管理控制台 API
-internal/ws/        WebSocket 网关
+internal/ws/        客户端 WebSocket 网关
 internal/store/     SQLite 访问层（迁移 + CRUD）
 internal/selftest/  回环自测
-internal/server/    组装 + 嵌入式 Web 页面
-examples/           接入方示例（Go / Python）
+internal/server/    组装 + TLS
+examples/           接入方示例（Go URL 回调 / Python / Go 长连接）
+scripts/            hosts 劫持脚本
+run.sh              一键构建并启动（自动打开浏览器）
 docs/               设计、方案、错误码对照表
-testweb/            早期验证用 demo，M1 稳定后将移除
 ```
 
 ## 常用命令
 
 ```bash
-make build      # 构建 im-server
-make run        # 启动
-make test       # 单元测试（含与企微官方加解密库的互通用例）
-make selftest   # 回环自测：跑完 M1 验收全链路
+./run.sh          # 一键：构建前端+后端、启动、打开浏览器、打印接入信息
+make build        # 前端 npm run build + go build（需 Node）
+make run          # 启动
+make test         # 单元测试（含与企微官方加解密库的互通用例，需 Node 构建前端）
+make selftest     # 回环自测：跑完 M1+M2+M3 验收全链路（42 项）
+make web-install  # 首次装前端依赖（cd web && npm install）
 make clean
 ```
+
+> 构建需 Node（Vite + tsc）。开发前端可 `cd web && npm run dev`（5173，API/WS 自动代理到 7788）。
