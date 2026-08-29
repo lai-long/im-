@@ -8,14 +8,35 @@ h2 { margin: 0 0 10px; font-size: 15px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
 th { color: #666; font-weight: 600; }
+.kv-table { margin-bottom: 12px; }
+.kv-table th { width: 130px; white-space: nowrap; }
 code { background: #f4f6f8; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
 input, select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 5px; }
-input[type=text] { width: 320px; }
+input[type=text] { width: 340px; }
 button { padding: 6px 12px; border: 0; border-radius: 5px; background: #2f4f6f; color: #fff; cursor: pointer; }
 button.ghost { background: #7d8ea0; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+td.row { margin: 0; }
+.nowrap { white-space: nowrap; }
 .badge { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 12px; color: #fff; }
 .ok { background: #2e9e5b; }
 .bad { background: #c0392b; }
+.st-pending { background: #8a94a0; }
+.st-processing { background: #3a6ea5; }
+.st-streaming { background: #7d4ee8; }
+.st-done { background: #2e9e5b; }
+.st-dead { background: #c0392b; }
+.st-type { background: #5a6b7c; }
 .muted { color: #888; }
-pre { background: #f7f8fa; padding: 8px; border-radius: 5px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; word-break: break-all; }
+pre { background: #f7f8fa; padding: 8px; border-radius: 5px; overflow-x: auto; margin: 6px 0; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow-y: auto; }
+
+/* 字段行 + 复制按钮 */
+.kv { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
+.webhook-line { display: flex; margin: 2px 0; }
+.chat-label { flex: none; color: #555; }
+.copy { padding: 1px 8px; font-size: 12px; background: #eef2f6; color: #2f4f6f; border: 1px solid #c9d4e0; border-radius: 4px; flex: none; }
+.copy:hover { background: #dce7f2; }
+
+.btn-link { display: inline-block; padding: 6px 12px; border-radius: 5px; background: #2e9e5b; color: #fff; text-decoration: none; }
+.btn-link:hover { background: #278a4e; }
+.err-cell { max-width: 320px; word-break: break-all; }

@@ -4,6 +4,7 @@ import type { User, Chat, Bot, Message, WsEvent } from '../shared/types';
 import { api } from '../shared/api';
 import { useWebSocket } from '../shared/ws';
 import { MessageList } from './components/MessageView';
+import { MentionInput } from './components/MentionInput';
 
 function kindOf(c: Chat) {
   if (c.type === 'single') return { label: '机器人单聊', cls: 'single', hint: '直接发消息即触发机器人回调' };
@@ -11,26 +12,43 @@ function kindOf(c: Chat) {
   return { label: '群聊', cls: 'group', hint: '群内 @机器人 触发回调' };
 }
 
+const STATUS_TEXT = { connecting: '连接中', connected: '已连接', reconnecting: '重连中' } as const;
+
 function Login({ onLogin }: { onLogin: (u: User) => void }) {
   const [users, setUsers] = useState<User[]>([]);
+  const [userid, setUserid] = useState('');
   const [name, setName] = useState('');
-  useEffect(() => { api.users().then(setUsers); }, []);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    api.users().then(us => {
+      const list = us || [];
+      setUsers(list);
+      if (list.length) setUserid(list[0].userid);
+    });
+  }, []);
   const enter = async () => {
-    const u = name.trim()
-      ? await api.login({ name: name.trim() })
-      : await api.login({ userid: (document.getElementById('preset') as HTMLSelectElement).value });
-    if (u && u.userid) { localStorage.setItem('im-user', JSON.stringify(u)); onLogin(u); }
+    const u: any = name.trim() ? await api.login({ name: name.trim() }) : await api.login({ userid });
+    if (u && u.userid) {
+      localStorage.setItem('im-user', JSON.stringify(u));
+      onLogin(u);
+    } else {
+      setErr(u?.errmsg || '登录失败，请确认平台已启动');
+    }
   };
   return (
     <div id="login">
       <div className="panel">
-        <strong>选择或注册用户</strong>
-        <select id="preset">
+        <h1>本地 IM</h1>
+        <p className="muted">企微机器人 / 自建应用联调客户端</p>
+        <label>选择预置用户</label>
+        <select value={userid} onChange={e => setUserid(e.target.value)}>
           {users.map(u => <option key={u.userid} value={u.userid}>{u.name}（{u.userid}）</option>)}
         </select>
-        <input id="nickname" placeholder="或输入新昵称自动注册" value={name}
+        <label>或输入新昵称自动注册</label>
+        <input placeholder="新昵称" value={name}
           onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && enter()} />
         <button onClick={enter}>进入</button>
+        {err && <div className="err">{err}</div>}
       </div>
     </div>
   );
@@ -45,7 +63,6 @@ export function App() {
   const [bots, setBots] = useState<Bot[]>([]);
   const [activeChatId, setActiveChatId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [text, setText] = useState('');
 
   const loadChats = useCallback(async () => {
     if (!me) return;
@@ -83,6 +100,11 @@ export function App() {
 
   if (!me) return <Login onLogin={setMe} />;
 
+  const logout = () => {
+    localStorage.removeItem('im-user');
+    setMe(null);
+  };
+
   const active = chats.find(c => c.id === activeChatId);
   const k = active ? kindOf(active) : null;
 
@@ -90,28 +112,33 @@ export function App() {
     const chat = await api.openSingleChat({ userid: me.userid, bot_id: botID });
     if (chat?.id) { setActiveChatId(chat.id); }
   };
-  const send = async () => {
-    const t = text.trim();
-    if (!t || !activeChatId) return;
+  const send = async (t: string) => {
+    if (!activeChatId) return;
     await api.send({ userid: me.userid, text: t, chat_id: activeChatId });
-    setText('');
   };
 
   return (
     <>
       <header>
-        <span className={`dot ${status}`} />本地 IM（企微机器人 / 自建应用联调）
+        <span className={`dot ${status}`} title={STATUS_TEXT[status]} />
+        <span className="title">本地 IM · 企微联调</span>
+        <span className="spacer" />
+        <a className="hdr-link" href="/admin.html">控制台</a>
+        <span className="me">{me.name}（{me.userid}）</span>
+        <button className="hdr-btn" onClick={logout}>切换用户</button>
       </header>
       <div id="body">
         <aside>
+          <div className="chat-head">会话</div>
+          {chats.length === 0 && <div className="aside-empty">暂无会话</div>}
           {chats.map(c => { const k2 = kindOf(c); return (
             <div key={c.id} className={`chat-item${c.id === activeChatId ? ' active' : ''}`}
               onClick={() => setActiveChatId(c.id)}>
-              {c.name}
+              <div className="chat-name">{c.name}</div>
               <div className="kind"><span className={`badge ${k2.cls}`}>{k2.label}</span></div>
             </div>
           ); })}
-          <div className="chat-head">发起单聊</div>
+          <div className="chat-head">发起机器人单聊</div>
           {bots.map(b => (
             <div key={b.id} className="chat-item bot" onClick={() => openSingle(b.id)}>💬 {b.name}</div>
           ))}
@@ -122,14 +149,23 @@ export function App() {
               <span>{active.name}</span>
               <span className={`badge ${k!.cls}`}>{k!.label}</span>
               <span className="hint">{k!.hint}</span>
-            </> : null}
+            </> : <span className="hint">从左侧选择一个会话</span>}
           </div>
-          <MessageList messages={messages} />
-          <footer>
-            <input id="input" placeholder={k ? k.hint + '…' : ''} value={text}
-              onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} />
-            <button onClick={send}>发送</button>
-          </footer>
+          {active ? (
+            <>
+              <MessageList messages={messages} chatId={activeChatId} />
+              <footer>
+                <MentionInput chatId={active.id} me={me.name}
+                  placeholder={k!.hint + '…'} onSend={send} />
+              </footer>
+            </>
+          ) : (
+            <div className="nochat">
+              <div>💬</div>
+              <p>选择左侧会话开始聊天</p>
+              <p className="muted">群里 @机器人 或与机器人单聊，即可触发加密回调</p>
+            </div>
+          )}
         </div>
       </div>
     </>
