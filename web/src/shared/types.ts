@@ -36,6 +36,13 @@ export interface ChatBotKey {
   webhook_key: string;
 }
 
+// 群成员/群内机器人（@ 自动补全候选）。
+export interface ChatMember {
+  kind: 'user' | 'bot';
+  name: string;
+  userid?: string;
+}
+
 export interface Agent {
   id: number;
   corp_id: number;

@@ -110,6 +110,27 @@ func (s *Store) ChatBots(chatID int64) ([]Bot, error) {
 	return out, nil
 }
 
+// ChatMembers 列出群成员（客户端 @ 自动补全用）。
+func (s *Store) ChatMembers(chatID int64) ([]User, error) {
+	rows, err := s.db.Query(`
+		SELECT u.id, u.corp_id, u.userid, u.name
+		FROM chat_member m JOIN "user" u ON u.id = m.user_id
+		WHERE m.chat_id = ? ORDER BY u.id`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.CorpID, &u.Userid, &u.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
 // GetMessageByMsgid 按 msgid 取消息（模板卡片交互定位用）。
 func (s *Store) GetMessageByMsgid(msgid string) (Message, error) {
 	var m Message

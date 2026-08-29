@@ -50,6 +50,28 @@ func RegisterClientAPI(mux *http.ServeMux, coreSvc *core.Service, st *store.Stor
 		writeJSON(w, chats)
 	})
 
+	// 群成员 + 群内机器人（客户端 @ 自动补全）。
+	mux.HandleFunc("GET /api/chats/members", func(w http.ResponseWriter, r *http.Request) {
+		chatID, _ := atoi64(r.URL.Query().Get("chat_id"))
+		type member struct {
+			Kind   string `json:"kind"` // user | bot
+			Name   string `json:"name"`
+			Userid string `json:"userid,omitempty"`
+		}
+		out := []member{}
+		if users, err := st.ChatMembers(chatID); err == nil {
+			for _, u := range users {
+				out = append(out, member{Kind: "user", Name: u.Name, Userid: u.Userid})
+			}
+		}
+		if bots, err := st.ChatBots(chatID); err == nil {
+			for _, b := range bots {
+				out = append(out, member{Kind: "bot", Name: b.Name})
+			}
+		}
+		writeJSON(w, out)
+	})
+
 	// 机器人列表（客户端发起单聊用）。
 	mux.HandleFunc("GET /api/bots", func(w http.ResponseWriter, r *http.Request) {
 		bots, err := st.ListBots()

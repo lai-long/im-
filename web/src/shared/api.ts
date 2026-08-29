@@ -1,7 +1,7 @@
 // fetch 封装：JSON GET/POST，失败返回 {errcode:-1,...} 而非抛错（前端健壮性）。
 // 所有用户可控文本由 React 自动转义，不再手写 escape。
 
-import type { User, Chat, Bot, AgentView, CallbackTask, Message } from './types';
+import type { User, Chat, Bot, AgentView, CallbackTask, Message, ChatMember } from './types';
 
 async function jget<T = any>(url: string): Promise<T> {
   try {
@@ -37,6 +37,8 @@ export const api = {
     jpost('/api/send', body),
   openSingleChat: (body: { userid: string; bot_id: number }) =>
     jpost<Chat>('/api/chats/single', body),
+  members: (chatID: number) =>
+    jget<ChatMember[]>(`/api/chats/members?chat_id=${chatID}`),
   cardInteract: (body: { userid: string; msgid: string; event_key: string; button_selection?: any }) =>
     jpost('/api/card/interact', body),
   exportCsv: (chatID: number) => `/api/export?chat_id=${chatID}&format=csv`,
